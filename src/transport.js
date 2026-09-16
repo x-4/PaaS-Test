@@ -33,7 +33,11 @@ let isShuttingDown = false;
 function createTransportServer() {
     const wss = new WebSocketServer({
         noServer: true,
-        handleProtocols: (protocols) => protocols[0] || false,
+        handleProtocols: (protocols) => {
+            // 接受客户端请求的第一个子协议；无则不选择（兼容所有客户端）
+            for (const p of protocols) return p;
+            return false;
+        },
         // 二进制数据传输优化：关闭压缩与文本校验
         perMessageDeflate: false,
         skipUTF8Validation: true,

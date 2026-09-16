@@ -225,19 +225,30 @@ server.on('upgrade', (request, socket, head) => {
         return;
     }
 
-    // 来源校验：防止跨站连接劫持
-    const origin = request.headers.origin;
-    if (origin) {
-        try {
-            const originHost = new URL(origin).hostname.toLowerCase();
-            const requestHost = (request.headers.host || '').split(':')[0].toLowerCase();
-            if (originHost !== requestHost) {
+    // Origin 校验（三档模式，兼顾伪装与兼容性）
+    // off:    完全不校验（最兼容，伪装最弱）
+    // loose:  只校验 Origin 格式是否为合法 URL（默认，兼容 PaaS 反代场景）
+    // strict: 强制 Origin 与 Host 同源（适合 VPS/自托管，伪装最强）
+    const originCheckMode = (process.env.ORIGIN_CHECK || 'loose').toLowerCase();
+    if (originCheckMode !== 'off') {
+        const origin = request.headers.origin;
+        if (origin) {
+            try {
+                const originUrl = new URL(origin);
+                if (originCheckMode === 'strict') {
+                    const originHost = originUrl.hostname.toLowerCase();
+                    const requestHost = (request.headers.host || '').split(':')[0].toLowerCase();
+                    if (originHost !== requestHost) {
+                        socket.destroy();
+                        return;
+                    }
+                }
+                // loose 模式：URL 解析成功即通过，不强制同源
+            } catch (e) {
+                // Origin 格式非法，拒绝（防止异常探测）
                 socket.destroy();
                 return;
             }
-        } catch (e) {
-            socket.destroy();
-            return;
         }
     }
 
