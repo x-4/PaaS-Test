@@ -48,7 +48,7 @@ function getWarehouses(req, res) {
 
 // GET /api/v1/inventory
 function getInventory(req, res) {
-    const { page, limit } = paginate(req, 150);
+    const { page, limit, offset } = paginate(req, 150);
     const items = [];
     for (let i = 0; i < limit; i++) {
         const sku = 'SKU-' + String(10000 + offset + i).padStart(5, '0');
@@ -73,7 +73,7 @@ function getInventory(req, res) {
 
 // GET /api/v1/sync/jobs
 function getSyncJobs(req, res) {
-    const { page, limit } = paginate(req, 80);
+    const { page, limit, offset } = paginate(req, 80);
     const jobs = [];
     for (let i = 0; i < limit; i++) {
         const status = SYNC_STATUSES[Math.floor(Math.random() * SYNC_STATUSES.length)];
@@ -121,13 +121,14 @@ function handleApiRequest(req, res) {
     const path = url.pathname;
 
     if (req.method !== 'GET') {
-        return jsonResponse(res, { error: 'Method not allowed' }, 405);
+        jsonResponse(res, { error: 'Method not allowed' }, 405);
+        return true;
     }
 
-    if (path === '/api/v1/warehouses') return getWarehouses(req, res);
-    if (path === '/api/v1/inventory') return getInventory(req, res);
-    if (path === '/api/v1/sync/jobs') return getSyncJobs(req, res);
-    if (path === '/api/v1/metrics') return getMetrics(req, res);
+    if (path === '/api/v1/warehouses') { getWarehouses(req, res); return true; }
+    if (path === '/api/v1/inventory') { getInventory(req, res); return true; }
+    if (path === '/api/v1/sync/jobs') { getSyncJobs(req, res); return true; }
+    if (path === '/api/v1/metrics') { getMetrics(req, res); return true; }
 
     return null; // 未匹配，交给后续路由
 }

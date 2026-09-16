@@ -1,94 +1,63 @@
 // ====================================================================
 // 遥测数据解析模块
-// 负责数据包队列处理与上游遥测端点通信
+// 负责数据包队列处理与 UDP 端点直接转发
 // ====================================================================
 
-const https = require('https');
+const dgram = require('dgram');
 const logger = require('./logger');
-const { BROWSER_TLS_OPTIONS } = require('./tls-profile');
 
-// 遥测上游连接复用（keep-alive + 标准化 TLS 参数）
-const TELEMETRY_AGENT = new https.Agent({
-    keepAlive: true,
-    keepAliveMsecs: 60000,
-    maxSockets: 64,
-    maxFreeSockets: 16,
-    ...BROWSER_TLS_OPTIONS
-});
+// 创建 UDP 转发器：直接将数据包转发到目标地址，接收响应后回传客户端
+function createUdpForwarder(ws, targetHost, targetPort) {
+    const socket = dgram.createSocket('udp4');
+    let closed = false;
 
-// 遥测上游端点列表（编码存储，运行时解码）
-const TELEMETRY_BACKENDS = [
-    'aHR0cHM6Ly8xLjEuMS4xL2Rucy1xdWVyeQ==',
-    'aHR0cHM6Ly9kbnMuZ29vZ2xlL2Rucy1xdWVyeQ==',
-    'aHR0cHM6Ly85LjkuOS45L2Rucy1xdWVyeQ=='
-].map(b64 => Buffer.from(b64, 'base64').toString('utf8'));
-
-// 向上游发送遥测数据
-function telemetryRequest(endpoint, payload) {
-    return new Promise((resolve, reject) => {
-        const url = new URL(endpoint);
-        const req = https.request({
-            hostname: url.hostname,
-            port: 443,
-            path: url.pathname + url.search,
-            method: 'POST',
-            agent: TELEMETRY_AGENT,
-            headers: {
-                'Accept': 'application/dns-message',
-                'Content-Type': 'application/dns-message',
-                'Content-Length': payload.length
-            },
-            timeout: 5000
-        }, (res) => {
-            if (res.statusCode !== 200) {
-                res.resume();
-                reject(new Error('Upstream status ' + res.statusCode));
-                return;
-            }
-            const chunks = [];
-            res.on('data', (c) => chunks.push(c));
-            res.on('end', () => resolve(Buffer.concat(chunks)));
-        });
-
-        req.on('error', reject);
-        req.on('timeout', () => req.destroy(new Error('Upstream timeout')));
-        req.write(payload);
-        req.end();
+    // 上游响应 → 客户端（封装为 2字节长度 + 数据体）
+    socket.on('message', (msg) => {
+        if (closed || ws.readyState !== ws.OPEN) return;
+        const frame = Buffer.alloc(2 + msg.length);
+        frame[0] = msg.length >> 8;
+        frame[1] = msg.length & 0xFF;
+        frame.set(msg, 2);
+        ws.send(frame);
     });
+
+    socket.on('error', (err) => {
+        logger.debug(`UDP forwarder error: ${targetHost}:${targetPort} - ${err.message}`);
+    });
+
+    return {
+        send: (data) => {
+            if (closed) return;
+            socket.send(data, targetPort, targetHost, (err) => {
+                if (err) logger.debug(`UDP send error: ${err.message}`);
+            });
+        },
+        destroy: () => {
+            closed = true;
+            try { socket.close(); } catch (e) {}
+        }
+    };
 }
 
 // 处理数据包队列（帧格式：2字节长度 + 数据体）
-async function processPacketQueue(ws, packetState) {
+function processPacketQueue(packetState, forwarder) {
     while (packetState.buffer.length >= 2) {
         const len = (packetState.buffer[0] << 8) | packetState.buffer[1];
+
+        if (len <= 0 || len > 65535) {
+            // 无效长度，丢弃缓冲
+            packetState.buffer = Buffer.alloc(0);
+            break;
+        }
 
         if (packetState.buffer.length >= 2 + len) {
             const payload = packetState.buffer.subarray(2, 2 + len);
             packetState.buffer = packetState.buffer.subarray(2 + len);
-
-            // 异步发送，上游失败自动降级到下一个端点
-            (async () => {
-                for (const endpoint of TELEMETRY_BACKENDS) {
-                    try {
-                        const respBuffer = await telemetryRequest(endpoint, payload);
-                        if (respBuffer && respBuffer.length > 0) {
-                            const frame = Buffer.alloc(2 + respBuffer.length);
-                            frame[0] = respBuffer.length >> 8;
-                            frame[1] = respBuffer.length & 0xFF;
-                            frame.set(respBuffer, 2);
-                            if (ws.readyState === ws.OPEN) ws.send(frame);
-                            break;
-                        }
-                    } catch (e) {
-                        logger.debug('Upstream unavailable, trying next');
-                        continue;
-                    }
-                }
-            })();
+            forwarder.send(payload);
         } else {
-            break;
+            break; // 数据不完整，等待更多
         }
     }
 }
 
-module.exports = { telemetryRequest, processPacketQueue, TELEMETRY_BACKENDS };
+module.exports = { createUdpForwarder, processPacketQueue };

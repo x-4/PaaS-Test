@@ -8,7 +8,7 @@ const { WebSocketServer } = require('ws');
 const { CONFIG } = require('./config');
 const logger = require('./logger');
 const { parseFrameHeader, parseTargetAddress } = require('./protocol');
-const { processPacketQueue } = require('./dns');
+const { processPacketQueue, createUdpForwarder } = require('./dns');
 const { sendObfuscated, createInboundObfuscator, isObfuscateEnabled } = require('./obfuscate');
 const { getPlatformConfig } = require('./platform');
 const {
@@ -88,6 +88,7 @@ function createTransportServer() {
         let inboundObfuscator = null;
         let pendingResponse = null; // 缓冲 VLESS 响应，待首个上游数据合并发送
         let responseFallbackTimer = null; // 响应兜底超时定时器
+        let udpForwarder = null; // UDP 转发器（数据包模式）
         const packetState = { buffer: Buffer.alloc(0) };
 
         // ---- 心跳保活（平台自适应间隔） ----
@@ -125,6 +126,11 @@ function createTransportServer() {
                 upstreamSocket = null;
             }
 
+            if (udpForwarder) {
+                udpForwarder.destroy();
+                udpForwarder = null;
+            }
+
             try { ws.terminate(); } catch (e) {}
         }
 
@@ -152,23 +158,25 @@ function createTransportServer() {
                 // VLESS 响应帧
                 const responseFrame = Buffer.from([frame[0], 0]);
 
-                // 首帧含载荷（如 TLS ClientHello）：缓冲响应，待首个上游数据合并发送
-                // 避免 Xray/v2rayN 在 WebSocket 消息边界处误判流结束
-                if (framePayload.length > 0) {
+                // 流模式且首帧含载荷：缓冲响应，待首个上游数据合并发送
+                // UDP 模式或首帧无载荷：立即发送响应
+                if (frameMeta.frameMode === 1 && framePayload.length > 0) {
                     pendingResponse = responseFrame;
                     logger.debug('Response buffered, waiting for first upstream data');
                 } else {
-                    // 首帧无载荷：立即发送响应，让客户端开始发送数据
                     ws.send(responseFrame);
-                    logger.debug('Response sent immediately (no payload in first frame)');
+                    logger.debug('Response sent immediately');
                 }
 
                 // ---- 数据包模式 ----
                 if (frameMeta.frameMode === 2) {
                     isPacketMode = true;
                     if (frameMeta.targetPort !== 53) { cleanup(); return; }
+                    const udpTarget = parseTargetAddress(frameMeta.addrFormat, frameMeta.targetNode);
+                    logger.debug(`UDP mode: ${udpTarget}:${frameMeta.targetPort} payload=${framePayload.length}B`);
+                    udpForwarder = createUdpForwarder(ws, udpTarget, frameMeta.targetPort);
                     packetState.buffer = framePayload;
-                    processPacketQueue(ws, packetState);
+                    processPacketQueue(packetState, udpForwarder);
                     return;
                 }
 
@@ -282,7 +290,7 @@ function createTransportServer() {
                 if (isPacketMode) {
                     packetState.buffer = Buffer.concat([packetState.buffer, frame]);
                     if (packetState.buffer.length > 65536) { cleanup(); return; }
-                    processPacketQueue(ws, packetState);
+                    processPacketQueue(packetState, udpForwarder);
                 } else {
                     // 客户端 → 上游 方向（带入站混淆 + 背压）
                     if (inboundObfuscator) {
