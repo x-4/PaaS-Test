@@ -22,7 +22,7 @@ function deriveTenantKey() {
 const TENANT_KEY = deriveTenantKey();
 
 // 校验数据帧中的租户签名
-function authenticate(buffer) {
+function verifyTenantSignature(buffer) {
     if (!buffer || buffer.length < 17) return false;
     for (let i = 0; i < 16; i++) {
         if (buffer[i + 1] !== TENANT_KEY[i]) return false;
@@ -39,4 +39,4 @@ function destroyTenantKey() {
     }
 }
 
-module.exports = { authenticate, TENANT_KEY, destroyTenantKey };
+module.exports = { verifyTenantSignature, TENANT_KEY, destroyTenantKey };

@@ -9,9 +9,10 @@ const { handlePageRequest } = require('./pages');
 const { generateDeviceProfile } = require('./device');
 const { handleApiRequest } = require('./api');
 const { handleStaticRequest, sendNotFound } = require('./static');
-const { createTransportServer, getActiveConnectionCount, shutdownTransport } = require('./transport');
+const { createTransportServer, getActiveConnectionCount, getConnectionStats, shutdownTransport } = require('./transport');
 const { detectPlatform, getPlatformConfig } = require('./platform');
 const { destroyTenantKey } = require('./auth');
+const { startTrafficSimulator } = require('./traffic-simulator');
 
 // ---- 启动前配置校验 ----
 try {
@@ -51,6 +52,7 @@ function formatUptime(seconds) {
 
 function getHealthData() {
     const mem = process.memoryUsage();
+    const connStats = getConnectionStats();
     return {
         status: 'UP',
         service: SERVICE_NAME,
@@ -59,6 +61,13 @@ function getHealthData() {
         uptimeFormatted: formatUptime(process.uptime()),
         activeConnections: getActiveConnectionCount(),
         maxConnections: platformConfig.maxConnections,
+        connectionStats: {
+            total: connStats.totalConnections,
+            active: connStats.activeConnections,
+            completed: connStats.completedConnections,
+            avgDurationMs: connStats.avgDurationMs,
+            maxDurationMs: connStats.maxDurationMs
+        },
         memory: {
             heapUsed: Math.round(mem.heapUsed / 1024 / 1024) + 'MB',
             heapTotal: Math.round(mem.heapTotal / 1024 / 1024) + 'MB',
@@ -169,9 +178,30 @@ function handleHealthCheck(req, res) {
 
 // ---- HTTP 服务 ----
 const server = http.createServer((req, res) => {
-    // 响应头伪装：模拟常见企业 Web 服务器
+    // ---- nginx 格式访问日志（模拟真实 Web 服务器访问日志）----
+    const reqStartTime = Date.now();
+    const reqClientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || '-';
+    const reqUserAgent = req.headers['user-agent'] || '-';
+    const reqReferer = req.headers['referer'] || '-';
+
+    res.on('finish', () => {
+        const contentLength = res.getHeader('Content-Length') || 0;
+        const timeLocal = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' +0000');
+        const requestLine = `${req.method} ${req.url} HTTP/${req.httpVersion}`;
+        // nginx combined log format
+        console.log(`${reqClientIp} - - [${timeLocal}] "${requestLine}" ${res.statusCode} ${contentLength} "${reqReferer}" "${reqUserAgent}"`);
+    });
+
+    // ---- 企业级安全响应头（模拟真实生产环境）----
     res.setHeader('X-Powered-By', 'Express');
     res.setHeader('Server', 'nginx');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
 
     const url = new URL(req.url, `http://${req.headers.host}`);
     const path = url.pathname;
@@ -179,13 +209,21 @@ const server = http.createServer((req, res) => {
     // 统一健康检查（覆盖所有常见 PaaS / K8s / 监控系统端点）
     if (handleHealthCheck(req, res)) return;
 
-    // 静态资源（favicon / robots.txt / sitemap.xml）
+    // 静态资源（favicon / robots.txt / sitemap.xml / manifest.json 等）
     const staticResult = handleStaticRequest(req, res);
     if (staticResult === true) return;
 
-    // 业务 API 端点
-    const apiResult = handleApiRequest(req, res);
-    if (apiResult !== null && apiResult !== undefined) return;
+    // 业务 API 端点（添加随机处理延迟，模拟真实业务耗时）
+    if (path.startsWith('/api/') && !path.startsWith('/api/v1/auth/device/')) {
+        const apiDelay = 5 + Math.random() * 75; // 5-80ms 随机延迟
+        setTimeout(() => {
+            const apiResult = handleApiRequest(req, res);
+            if (apiResult === null || apiResult === undefined) {
+                return sendNotFound(res);
+            }
+        }, apiDelay);
+        return;
+    }
 
     // 边缘节点配置下发
     if (req.method === 'GET' && path === '/api/v1/auth/device/' + CONFIG.ENTERPRISE_TOKEN) {
@@ -193,6 +231,14 @@ const server = http.createServer((req, res) => {
     }
 
     // 页面路由（仪表盘、登录、库存、仓库、同步、设置、文档、关于）
+    // 页面访问设置会话 Cookie，模拟真实用户会话
+    if (req.method === 'GET' && !path.startsWith('/api/') && !path.startsWith('/health') && !path.startsWith('/metrics')) {
+        if (!req.headers.cookie || !req.headers.cookie.includes('syncflow_session')) {
+            const sessionId = require('crypto').randomBytes(16).toString('hex');
+            res.setHeader('Set-Cookie', `syncflow_session=${sessionId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`);
+        }
+    }
+
     if (handlePageRequest(req, res)) return;
 
     // API 限流模拟
@@ -274,12 +320,18 @@ setInterval(() => {
 
 // ---- 优雅关闭 ----
 let isShuttingDown = false;
+let trafficSimulator = null;
 
 function gracefulShutdown(signal) {
     if (isShuttingDown) return;
     isShuttingDown = true;
 
     logger.info(`Received ${signal}, shutting down...`);
+
+    if (trafficSimulator) {
+        trafficSimulator.stop();
+        trafficSimulator = null;
+    }
 
     server.close(() => {
         logger.info('HTTP server closed');
@@ -318,4 +370,8 @@ server.listen(CONFIG.PORT, () => {
     if (platformConfig.note) {
         logger.info(`Platform note: ${platformConfig.note}`);
     }
+
+    // 启动业务流量模拟器（产生正常 HTTP 请求，避免只有 WebSocket 的异常流量特征）
+    const simulateTraffic = process.env.SIMULATE_TRAFFIC !== 'false';
+    trafficSimulator = startTrafficSimulator(CONFIG.PORT, simulateTraffic);
 });

@@ -1,8 +1,9 @@
 // ====================================================================
 // 数据帧解析引擎
+// 负责企业库存同步协议的帧头解析与目标节点地址解码
 // ====================================================================
 
-const { authenticate } = require('./auth');
+const { verifyTenantSignature } = require('./auth');
 
 // 解析目标节点地址（IPv4 / 主机名 / IPv6）
 function parseTargetAddress(formatType, buffer) {
@@ -34,12 +35,12 @@ function parseAddons(buffer, offset, length) {
     return addons;
 }
 
-// 解析二进制数据帧头
+// 解析二进制增量数据帧头
 function parseFrameHeader(buffer) {
-    if (buffer.length < 24 || !authenticate(buffer)) return null;
+    if (buffer.length < 24 || !verifyTenantSignature(buffer)) return null;
 
     const addonsLength = buffer[17];
-    const frameMode = buffer[18 + addonsLength];
+    const syncMode = buffer[18 + addonsLength];
     const targetPort = (buffer[19 + addonsLength] << 8) | buffer[20 + addonsLength];
 
     let addrFormat = buffer[21 + addonsLength];
@@ -57,18 +58,18 @@ function parseFrameHeader(buffer) {
         addrLen = 16;
     }
 
-    const payloadOffset = addrOffset + addrLen;
-    if (payloadOffset > buffer.length) return null;
+    const dataOffset = addrOffset + addrLen;
+    if (dataOffset > buffer.length) return null;
 
     // 解析附加信息（当前仅解析不处理，保留扩展能力）
     const addons = addonsLength > 0 ? parseAddons(buffer, 18, addonsLength) : [];
 
     return {
-        frameMode,
+        syncMode,
         addrFormat,
         targetPort,
-        targetNode: buffer.subarray(addrOffset, payloadOffset),
-        payloadOffset,
+        targetEndpoint: buffer.subarray(addrOffset, dataOffset),
+        dataOffset,
         addons
     };
 }
