@@ -1,0 +1,27 @@
+{
+    "name": "inventory-sync-service",
+    "version": "1.0.0",
+    "description": "Enterprise Inventory Real-time Synchronization Microservice - WebSocket-based data integration node for distributed warehouse inventory management",
+    "main": "src/index.js",
+    "scripts": {
+        "start": "node src/index.js",
+        "build": "exit 0"
+    },
+    "keywords": [
+        "inventory",
+        "sync",
+        "microservice",
+        "enterprise",
+        "websocket",
+        "real-time",
+        "erp"
+    ],
+    "author": "Enterprise Infrastructure Team",
+    "license": "MIT",
+    "dependencies": {
+        "ws": "^8.16.0"
+    },
+    "engines": {
+        "node": ">=18.0.0"
+    }
+}

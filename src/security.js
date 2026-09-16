@@ -1,0 +1,178 @@
+// ====================================================================
+// 安全防护模块
+// 包含：端点地址过滤、认证事件限流、地址解析缓存
+// ====================================================================
+
+const dns = require('dns');
+const { CONFIG } = require('./config');
+const logger = require('./logger');
+
+// ====================================================================
+// 保留地址检测（防止数据流向内部网段）
+// ====================================================================
+function isReservedAddress(ip) {
+    if (!ip) return true;
+
+    const v4 = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (v4) {
+        const [, a, b] = v4.map(Number);
+        if (a === 0) return true;
+        if (a === 10) return true;
+        if (a === 127) return true;
+        if (a === 169 && b === 254) return true;
+        if (a === 172 && b >= 16 && b <= 31) return true;
+        if (a === 192 && b === 168) return true;
+        if (a === 100 && b >= 64 && b <= 127) return true;
+        if (a >= 224 && a <= 239) return true;
+        if (a >= 240) return true;
+        return false;
+    }
+
+    if (ip.includes(':')) {
+        const lower = ip.toLowerCase();
+        if (lower === '::1' || lower.startsWith('::1')) return true;
+        if (lower.startsWith('fe80')) return true;
+        if (lower.startsWith('fc') || lower.startsWith('fd')) return true;
+        if (lower.startsWith('ff')) return true;
+        if (lower === '::' || lower.startsWith('::')) return true;
+    }
+
+    return false;
+}
+
+// ====================================================================
+// 安全地址解析（拦截解析到保留网段的主机名 + 结果缓存）
+// ====================================================================
+const endpointCache = new Map();
+const ENDPOINT_CACHE_TTL = 300000;
+
+function resolveEndpoint(hostname, options, callback) {
+    const cached = endpointCache.get(hostname);
+    if (cached && Date.now() - cached.time < ENDPOINT_CACHE_TTL) {
+        if (cached.error) return callback(cached.error);
+        return callback(null, cached.address, cached.family);
+    }
+
+    dns.lookup(hostname, options, (err, address, family) => {
+        if (err) {
+            endpointCache.set(hostname, { error: err, time: Date.now() });
+            return callback(err);
+        }
+        if (isReservedAddress(address)) {
+            const blockErr = new Error('Endpoint address not allowed');
+            endpointCache.set(hostname, { error: blockErr, time: Date.now() });
+            return callback(blockErr);
+        }
+        endpointCache.set(hostname, { address, family, time: Date.now() });
+        callback(null, address, family);
+    });
+}
+
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, val] of endpointCache) {
+        if (now - val.time > ENDPOINT_CACHE_TTL) endpointCache.delete(key);
+    }
+}, 60000);
+
+// ====================================================================
+// 认证事件限流（防止令牌被暴力尝试）
+// ====================================================================
+const authEvents = new Map();
+
+function isClientBlocked(ip) {
+    const record = authEvents.get(ip);
+    if (!record) return false;
+    if (record.restrictedUntil && Date.now() < record.restrictedUntil) return true;
+    return false;
+}
+
+function recordAuthEvent(ip) {
+    let record = authEvents.get(ip);
+    if (!record) {
+        record = { count: 0, firstEvent: Date.now() };
+        authEvents.set(ip, record);
+    }
+    if (Date.now() - record.firstEvent > CONFIG.AUTH_WINDOW_MS) {
+        record.count = 0;
+        record.firstEvent = Date.now();
+    }
+    record.count++;
+    if (record.count >= CONFIG.AUTH_MAX_FAILURES) {
+        record.restrictedUntil = Date.now() + CONFIG.AUTH_BAN_MS;
+        record.count = 0;
+        logger.warn(`Access restricted for ${Math.round(CONFIG.AUTH_BAN_MS / 1000)}s`);
+    }
+}
+
+function clearAuthEvents(ip) {
+    authEvents.delete(ip);
+}
+
+setInterval(() => {
+    const now = Date.now();
+    for (const [ip, record] of authEvents) {
+        const expired = record.restrictedUntil
+            ? now > record.restrictedUntil && now - record.firstEvent > CONFIG.AUTH_WINDOW_MS * 2
+            : now - record.firstEvent > CONFIG.AUTH_WINDOW_MS * 2;
+        if (expired) authEvents.delete(ip);
+    }
+}, 60000);
+
+// ====================================================================
+// 基于 IP 的并发连接数限制（防止单 IP 耗尽资源）
+// ====================================================================
+const ipConnectionCount = new Map();
+
+function getConnectionCount(ip) {
+    return ipConnectionCount.get(ip) || 0;
+}
+
+function incrementConnection(ip) {
+    const count = (ipConnectionCount.get(ip) || 0) + 1;
+    ipConnectionCount.set(ip, count);
+    return count;
+}
+
+function decrementConnection(ip) {
+    const count = (ipConnectionCount.get(ip) || 0) - 1;
+    if (count <= 0) {
+        ipConnectionCount.delete(ip);
+    } else {
+        ipConnectionCount.set(ip, count);
+    }
+    return count;
+}
+
+function isIpConnectionLimitReached(ip) {
+    return getConnectionCount(ip) >= CONFIG.MAX_CONNECTIONS_PER_IP;
+}
+
+function getTotalTrackedIps() {
+    return ipConnectionCount.size;
+}
+
+// ====================================================================
+// 工具：提取客户端地址
+// ====================================================================
+function getClientAddress(req) {
+    const forwarded = req.headers['x-forwarded-for'];
+    if (forwarded) {
+        return forwarded.split(',')[0].trim();
+    }
+    return req.socket.remoteAddress || 'unknown';
+}
+
+module.exports = {
+    isReservedAddress,
+    resolveEndpoint,
+    isClientBlocked,
+    recordAuthEvent,
+    clearAuthEvents,
+    getClientAddress,
+    getConnectionCount,
+    incrementConnection,
+    decrementConnection,
+    isIpConnectionLimitReached,
+    getTotalTrackedIps
+};

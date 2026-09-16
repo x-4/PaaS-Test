@@ -1,0 +1,21 @@
+# Render Blueprint 部署配置
+services:
+  - type: web
+    name: inventory-sync-service
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: standard
+    healthCheckPath: /health
+    healthCheckTimeout: 5
+    numInstances: 1
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      - key: LOG_LEVEL
+        value: info
+      - key: TENANT_ID
+        sync: false

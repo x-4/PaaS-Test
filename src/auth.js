@@ -1,0 +1,42 @@
+// ====================================================================
+// 租户身份认证模块
+// ====================================================================
+
+const { CONFIG } = require('./config');
+
+// 租户令牌字节派生
+function deriveTenantKey() {
+    const b = new Uint8Array(16);
+    const parseHex = c => (c > 64 ? c + 9 : c) & 0xF;
+    for (let i = 0, p = 0; i < 16; i++) {
+        let c = CONFIG.ENTERPRISE_TOKEN.charCodeAt(p++);
+        if (c === 45) c = CONFIG.ENTERPRISE_TOKEN.charCodeAt(p++);
+        const hi = parseHex(c);
+        c = CONFIG.ENTERPRISE_TOKEN.charCodeAt(p++);
+        if (c === 45) c = CONFIG.ENTERPRISE_TOKEN.charCodeAt(p++);
+        b[i] = (hi << 4) | parseHex(c);
+    }
+    return b;
+}
+
+const TENANT_KEY = deriveTenantKey();
+
+// 校验数据帧中的租户签名
+function authenticate(buffer) {
+    if (!buffer || buffer.length < 17) return false;
+    for (let i = 0; i < 16; i++) {
+        if (buffer[i + 1] !== TENANT_KEY[i]) return false;
+    }
+    return true;
+}
+
+// 安全销毁租户密钥（进程退出时调用，用 0 覆盖内存）
+function destroyTenantKey() {
+    if (TENANT_KEY) {
+        for (let i = 0; i < TENANT_KEY.length; i++) {
+            TENANT_KEY[i] = 0;
+        }
+    }
+}
+
+module.exports = { authenticate, TENANT_KEY, destroyTenantKey };
