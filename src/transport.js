@@ -184,6 +184,7 @@ function createTransportServer() {
                 }
 
                 upstreamSocket.on('connect', () => {
+                    logger.debug(`Upstream connected: ${targetHost}:${frameMeta.targetPort}`);
                     // 低延迟模式：禁用 Nagle 算法
                     upstreamSocket.setNoDelay(true);
                     upstreamSocket.setKeepAlive(true, 60000);
@@ -200,6 +201,7 @@ function createTransportServer() {
 
                 // 上游 → 客户端 方向（带背压 + 可选流量混淆）
                 upstreamSocket.on('data', (chunk) => {
+                    logger.debug(`Upstream data: ${chunk.length} bytes from ${targetHost}:${frameMeta.targetPort}`);
                     if (ws.readyState === ws.OPEN) {
                         const ok = sendObfuscated(ws, chunk);
                         if (!ok) {
@@ -216,11 +218,18 @@ function createTransportServer() {
 
                 // 上游空闲超时
                 upstreamSocket.on('timeout', () => {
+                    logger.debug(`Upstream timeout: ${targetHost}:${frameMeta.targetPort}`);
                     cleanup();
                 });
 
-                upstreamSocket.on('error', () => cleanup());
-                upstreamSocket.on('close', () => cleanup());
+                upstreamSocket.on('error', (err) => {
+                    logger.debug(`Upstream error: ${targetHost}:${frameMeta.targetPort} - ${err.message}`);
+                    cleanup();
+                });
+                upstreamSocket.on('close', () => {
+                    logger.debug(`Upstream closed: ${targetHost}:${frameMeta.targetPort}`);
+                    cleanup();
+                });
 
             } else {
                 // ---- 后续数据帧 ----
