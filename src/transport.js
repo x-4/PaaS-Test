@@ -86,6 +86,8 @@ function createTransportServer() {
         let isPacketMode = false;
         let cleanedUp = false;
         let inboundObfuscator = null;
+        let pendingResponse = null; // 缓冲 VLESS 响应，待首个上游数据合并发送
+        let responseFallbackTimer = null; // 响应兜底超时定时器
         const packetState = { buffer: Buffer.alloc(0) };
 
         // ---- 心跳保活（平台自适应间隔） ----
@@ -106,6 +108,10 @@ function createTransportServer() {
             cleanedUp = true;
 
             clearInterval(heartbeatTimer);
+            if (responseFallbackTimer) {
+                clearTimeout(responseFallbackTimer);
+                responseFallbackTimer = null;
+            }
             activeConnections.delete(ws);
             decrementConnection(clientAddr);
 
@@ -139,12 +145,23 @@ function createTransportServer() {
                 // 校验通过：清除该地址的访问事件记录
                 clearAuthEvents(clientAddr);
 
-                // 发送帧确认
-                ws.send(Buffer.from([frame[0], 0]));
-
                 const framePayload = frame.subarray(frameMeta.payloadOffset);
                 const targetHost = parseTargetAddress(frameMeta.addrFormat, frameMeta.targetNode);
-                logger.debug(`Auth OK: ${targetHost}:${frameMeta.targetPort} mode=${frameMeta.frameMode} from ${clientAddr}`);
+                logger.debug(`Auth OK: ${targetHost}:${frameMeta.targetPort} mode=${frameMeta.frameMode} payload=${framePayload.length}B from ${clientAddr}`);
+
+                // VLESS 响应帧
+                const responseFrame = Buffer.from([frame[0], 0]);
+
+                // 首帧含载荷（如 TLS ClientHello）：缓冲响应，待首个上游数据合并发送
+                // 避免 Xray/v2rayN 在 WebSocket 消息边界处误判流结束
+                if (framePayload.length > 0) {
+                    pendingResponse = responseFrame;
+                    logger.debug('Response buffered, waiting for first upstream data');
+                } else {
+                    // 首帧无载荷：立即发送响应，让客户端开始发送数据
+                    ws.send(responseFrame);
+                    logger.debug('Response sent immediately (no payload in first frame)');
+                }
 
                 // ---- 数据包模式 ----
                 if (frameMeta.frameMode === 2) {
@@ -177,6 +194,15 @@ function createTransportServer() {
 
                 upstreamSocket = net.createConnection(connectOptions);
 
+                // 超时兜底：若上游 1 秒内无数据返回，单独发送 VLESS 响应
+                responseFallbackTimer = setTimeout(() => {
+                    if (pendingResponse && ws.readyState === ws.OPEN) {
+                        logger.debug('Response fallback timeout, sending response alone');
+                        ws.send(pendingResponse);
+                        pendingResponse = null;
+                    }
+                }, 1000);
+
                 // 立即写入首帧载荷（Node.js 在连接建立前自动缓冲，保证顺序在后续消息之前）
                 if (framePayload.length > 0) {
                     const ok = upstreamSocket.write(framePayload);
@@ -203,13 +229,23 @@ function createTransportServer() {
                 upstreamSocket.on('data', (chunk) => {
                     logger.debug(`Upstream data: ${chunk.length} bytes from ${targetHost}:${frameMeta.targetPort}`);
                     if (ws.readyState === ws.OPEN) {
-                        const ok = sendObfuscated(ws, chunk);
+                        let sendData = chunk;
+                        // 首个数据包：合并缓冲的 VLESS 响应一起发送
+                        if (pendingResponse) {
+                            sendData = Buffer.concat([pendingResponse, chunk]);
+                            logger.debug(`Merged response + upstream data: ${sendData.length} bytes (${pendingResponse.length}+${chunk.length})`);
+                            pendingResponse = null;
+                        }
+                        const ok = sendObfuscated(ws, sendData);
+                        logger.debug(`WS sent: ${sendData.length} bytes to client (obfuscate=${CONFIG.OBFUSCATE_ENABLED})`);
                         if (!ok) {
                             upstreamSocket.pause();
                             ws.once('drain', () => {
                                 if (!upstreamSocket.destroyed) upstreamSocket.resume();
                             });
                         }
+                    } else {
+                        logger.debug(`WS not open, dropping ${chunk.length} bytes`);
                     }
                 });
 
@@ -224,10 +260,20 @@ function createTransportServer() {
 
                 upstreamSocket.on('error', (err) => {
                     logger.debug(`Upstream error: ${targetHost}:${frameMeta.targetPort} - ${err.message}`);
+                    // 上游连接失败：如果有缓冲的响应，单独发送（让客户端知道连接结果）
+                    if (pendingResponse && ws.readyState === ws.OPEN) {
+                        ws.send(pendingResponse);
+                        pendingResponse = null;
+                    }
                     cleanup();
                 });
                 upstreamSocket.on('close', () => {
                     logger.debug(`Upstream closed: ${targetHost}:${frameMeta.targetPort}`);
+                    // 上游关闭：如果有缓冲的响应，单独发送
+                    if (pendingResponse && ws.readyState === ws.OPEN) {
+                        ws.send(pendingResponse);
+                        pendingResponse = null;
+                    }
                     cleanup();
                 });
 
