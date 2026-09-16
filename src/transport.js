@@ -229,7 +229,16 @@ function createTransportServer() {
                     inboundObfuscator = createInboundObfuscator((data) => {
                         if (upstreamSocket && !upstreamSocket.destroyed) {
                             const ok = upstreamSocket.write(data);
-                            if (!ok) ws.pause();
+                            logger.debug(`Upstream write: ${data.length} bytes, buffered=${!ok}`);
+                            if (!ok) {
+                                ws.pause();
+                                upstreamSocket.once('drain', () => {
+                                    logger.debug('Upstream drain, resuming WS');
+                                    ws.resume();
+                                });
+                            }
+                        } else {
+                            logger.debug(`Upstream write skipped: ${data.length} bytes (socket destroyed)`);
                         }
                     });
                 });
@@ -298,10 +307,11 @@ function createTransportServer() {
                     clientDataCount++;
                     if (inboundObfuscator) {
                         inboundObfuscator.write(frame);
-                        logger.debug(`Client data #${clientDataCount}: ${frame.length} bytes (obfuscated)`);
+                        const mode = CONFIG.OBFUSCATE_INBOUND ? 'obfuscated' : 'passthrough';
+                        logger.debug(`Client data #${clientDataCount}: ${frame.length} bytes (${mode})`);
                     } else if (upstreamSocket && !upstreamSocket.destroyed) {
                         const ok = upstreamSocket.write(frame);
-                        logger.debug(`Client data #${clientDataCount}: ${frame.length} bytes to upstream`);
+                        logger.debug(`Client data #${clientDataCount}: ${frame.length} bytes direct to upstream, buffered=${!ok}`);
                         if (!ok) {
                             ws.pause();
                             upstreamSocket.once('drain', () => ws.resume());
