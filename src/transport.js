@@ -89,6 +89,8 @@ function createTransportServer() {
         let pendingResponse = null; // 缓冲 VLESS 响应，待首个上游数据合并发送
         let responseFallbackTimer = null; // 响应兜底超时定时器
         let udpForwarder = null; // UDP 转发器（数据包模式）
+        let upstreamDataCount = 0; // 上游→客户端 数据包计数
+        let clientDataCount = 0;   // 客户端→上游 数据包计数
         const packetState = { buffer: Buffer.alloc(0) };
 
         // ---- 心跳保活（平台自适应间隔） ----
@@ -158,9 +160,8 @@ function createTransportServer() {
                 // VLESS 响应帧
                 const responseFrame = Buffer.from([frame[0], 0]);
 
-                // 流模式且首帧含载荷：缓冲响应，待首个上游数据合并发送
-                // UDP 模式或首帧无载荷：立即发送响应
-                if (frameMeta.frameMode === 1 && framePayload.length > 0) {
+                // 流模式且首帧含载荷且开启合并：缓冲响应，待首个上游数据合并发送
+                if (frameMeta.frameMode === 1 && framePayload.length > 0 && CONFIG.MERGE_RESPONSE) {
                     pendingResponse = responseFrame;
                     logger.debug('Response buffered, waiting for first upstream data');
                 } else {
@@ -235,7 +236,8 @@ function createTransportServer() {
 
                 // 上游 → 客户端 方向（带背压 + 可选流量混淆）
                 upstreamSocket.on('data', (chunk) => {
-                    logger.debug(`Upstream data: ${chunk.length} bytes from ${targetHost}:${frameMeta.targetPort}`);
+                    upstreamDataCount++;
+                    logger.debug(`Upstream data #${upstreamDataCount}: ${chunk.length} bytes from ${targetHost}:${frameMeta.targetPort}`);
                     if (ws.readyState === ws.OPEN) {
                         let sendData = chunk;
                         // 首个数据包：合并缓冲的 VLESS 响应一起发送
@@ -245,7 +247,7 @@ function createTransportServer() {
                             pendingResponse = null;
                         }
                         const ok = sendObfuscated(ws, sendData);
-                        logger.debug(`WS sent: ${sendData.length} bytes to client (obfuscate=${CONFIG.OBFUSCATE_ENABLED})`);
+                        logger.debug(`WS sent #${upstreamDataCount}: ${sendData.length} bytes to client (obfuscate=${CONFIG.OBFUSCATE_ENABLED})`);
                         if (!ok) {
                             upstreamSocket.pause();
                             ws.once('drain', () => {
@@ -293,14 +295,19 @@ function createTransportServer() {
                     processPacketQueue(packetState, udpForwarder);
                 } else {
                     // 客户端 → 上游 方向（带入站混淆 + 背压）
+                    clientDataCount++;
                     if (inboundObfuscator) {
                         inboundObfuscator.write(frame);
+                        logger.debug(`Client data #${clientDataCount}: ${frame.length} bytes (obfuscated)`);
                     } else if (upstreamSocket && !upstreamSocket.destroyed) {
                         const ok = upstreamSocket.write(frame);
+                        logger.debug(`Client data #${clientDataCount}: ${frame.length} bytes to upstream`);
                         if (!ok) {
                             ws.pause();
                             upstreamSocket.once('drain', () => ws.resume());
                         }
+                    } else {
+                        logger.debug(`Client data #${clientDataCount}: ${frame.length} bytes dropped (no upstream)`);
                     }
                 }
             }

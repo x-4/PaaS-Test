@@ -28,6 +28,9 @@ const CONFIG = {
     // ---- 流量混淆参数（借鉴 AnyTLS PaddingScheme 思路） ----
     // 默认开启，通过随机拆分/合并/延迟破坏包长与时序特征
     OBFUSCATE_ENABLED: process.env.OBFUSCATE !== '0' && process.env.OBFUSCATE !== 'false',
+    // VLESS 响应与首个上游数据包合并发送（兼容 Xray/v2rayN，默认开启）
+    // 若客户端无法连接，可设置 MERGE_RESPONSE=0 回退为分开发送
+    MERGE_RESPONSE: process.env.MERGE_RESPONSE !== '0' && process.env.MERGE_RESPONSE !== 'false',
     // 拆分策略：random(随机大小) / fixed(固定大小) / burst(突发模式) / none(透传)
     OBFUSCATE_MODE: (process.env.OBFUSCATE_MODE || 'random').toLowerCase(),
     OBFUSCATE_MIN: parseInt(process.env.OBFUSCATE_MIN, 10) || 1024,    // 最小帧 1KB
