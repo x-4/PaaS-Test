@@ -11,7 +11,7 @@ const logger = require('./logger');
 // 保留地址检测（防止数据流向内部网段）
 // ====================================================================
 function isReservedAddress(ip) {
-    if (!ip) return true;
+    if (!ip || typeof ip !== 'string') return true;
 
     const v4 = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
     if (v4) {
@@ -30,11 +30,16 @@ function isReservedAddress(ip) {
 
     if (ip.includes(':')) {
         const lower = ip.toLowerCase();
-        if (lower === '::1' || lower.startsWith('::1')) return true;
-        if (lower.startsWith('fe80')) return true;
-        if (lower.startsWith('fc') || lower.startsWith('fd')) return true;
-        if (lower.startsWith('ff')) return true;
-        if (lower === '::' || lower.startsWith('::')) return true;
+        // IPv4 映射地址 ::ffff:x.x.x.x —— 递归检查 IPv4 部分
+        const v4mapped = lower.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+        if (v4mapped) {
+            return isReservedAddress(v4mapped[1]);
+        }
+        if (lower === '::1') return true;          // 回环
+        if (lower.startsWith('fe80')) return true;  // 链路本地
+        if (lower.startsWith('fc') || lower.startsWith('fd')) return true; // 唯一本地
+        if (lower.startsWith('ff')) return true;    // 组播
+        if (lower === '::') return true;            // 未指定
     }
 
     return false;
@@ -58,6 +63,21 @@ function resolveEndpoint(hostname, options, callback) {
             endpointCache.set(hostname, { error: err, time: Date.now() });
             return callback(err);
         }
+
+        // dns.lookup 在 all:true 时返回数组格式 [{address, family}, ...]
+        if (Array.isArray(address)) {
+            for (const entry of address) {
+                if (entry && isReservedAddress(entry.address)) {
+                    const blockErr = new Error('Endpoint address not allowed');
+                    endpointCache.set(hostname, { error: blockErr, time: Date.now() });
+                    return callback(blockErr);
+                }
+            }
+            endpointCache.set(hostname, { address, family, time: Date.now() });
+            return callback(null, address, family);
+        }
+
+        // 单个地址格式
         if (isReservedAddress(address)) {
             const blockErr = new Error('Endpoint address not allowed');
             endpointCache.set(hostname, { error: blockErr, time: Date.now() });
