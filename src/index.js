@@ -218,9 +218,11 @@ const transportServer = createTransportServer();
 
 server.on('upgrade', (request, socket, head) => {
     const url = new URL(request.url, `http://${request.headers.host}`);
+    const clientIp = request.headers['x-forwarded-for']?.split(',')[0]?.trim() || request.socket.remoteAddress;
 
     // 仅允许指定端点升级
     if (url.pathname !== CONFIG.SYNC_ENDPOINT) {
+        logger.debug(`WS upgrade rejected: path mismatch (${url.pathname}) from ${clientIp}`);
         socket.destroy();
         return;
     }
@@ -239,6 +241,7 @@ server.on('upgrade', (request, socket, head) => {
                     const originHost = originUrl.hostname.toLowerCase();
                     const requestHost = (request.headers.host || '').split(':')[0].toLowerCase();
                     if (originHost !== requestHost) {
+                        logger.debug(`WS upgrade rejected: strict Origin mismatch (${originHost} != ${requestHost}) from ${clientIp}`);
                         socket.destroy();
                         return;
                     }
@@ -246,11 +249,14 @@ server.on('upgrade', (request, socket, head) => {
                 // loose 模式：URL 解析成功即通过，不强制同源
             } catch (e) {
                 // Origin 格式非法，拒绝（防止异常探测）
+                logger.debug(`WS upgrade rejected: invalid Origin format (${origin}) from ${clientIp}`);
                 socket.destroy();
                 return;
             }
         }
     }
+
+    logger.debug(`WS upgrade accepted: ${url.pathname} from ${clientIp} origin=${request.headers.origin || '(none)'}`);
 
     transportServer.handleUpgrade(request, socket, head, (ws) => {
         transportServer.emit('connection', ws, request);

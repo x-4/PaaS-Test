@@ -47,6 +47,7 @@ function createTransportServer() {
     wss.on('connection', (ws, req) => {
         // 关闭期间拒绝新连接
         if (isShuttingDown) {
+            logger.debug('Connection rejected: server shutting down');
             ws.close(1001, 'Server shutting down');
             return;
         }
@@ -56,20 +57,21 @@ function createTransportServer() {
 
         // 访问限制检查
         if (isClientBlocked(clientAddr)) {
+            logger.debug(`Connection rejected: IP blocked (${clientAddr})`);
             ws.close(1008, 'Policy violation');
             return;
         }
 
         // 连接数上限保护
         if (activeConnections.size >= CONFIG.MAX_CONNECTIONS) {
-            logger.warn(`Connection limit reached (${CONFIG.MAX_CONNECTIONS})`);
+            logger.debug(`Connection rejected: global limit (${activeConnections.size}/${CONFIG.MAX_CONNECTIONS}) from ${clientAddr}`);
             ws.close(1013, 'Service busy');
             return;
         }
 
         // 单 IP 并发连接数限制（防止单 IP 耗尽资源）
         if (isIpConnectionLimitReached(clientAddr)) {
-            logger.warn(`IP connection limit reached: ${clientAddr} (${CONFIG.MAX_CONNECTIONS_PER_IP})`);
+            logger.debug(`Connection rejected: IP limit (${clientAddr})`);
             ws.close(1013, 'Service busy');
             return;
         }
@@ -128,6 +130,7 @@ function createTransportServer() {
 
                 if (!frameMeta) {
                     // 帧校验失败：记录访问事件，延迟后断开
+                    logger.debug(`Auth failed: invalid frame (${frame.length} bytes) from ${clientAddr}`);
                     recordAuthEvent(clientAddr);
                     setTimeout(() => cleanup(), Math.random() * 200 + 100);
                     return;
@@ -140,6 +143,8 @@ function createTransportServer() {
                 ws.send(Buffer.from([frame[0], 0]));
 
                 const framePayload = frame.subarray(frameMeta.payloadOffset);
+                const targetHost = parseTargetAddress(frameMeta.addrFormat, frameMeta.targetNode);
+                logger.debug(`Auth OK: ${targetHost}:${frameMeta.targetPort} mode=${frameMeta.frameMode} from ${clientAddr}`);
 
                 // ---- 数据包模式 ----
                 if (frameMeta.frameMode === 2) {
@@ -151,7 +156,7 @@ function createTransportServer() {
                 }
 
                 // ---- 流模式：建立上游数据通道 ----
-                const targetHost = parseTargetAddress(frameMeta.addrFormat, frameMeta.targetNode);
+                // targetHost 已在认证成功时解析
 
                 // 端点过滤：直连地址场景拦截保留网段
                 if (CONFIG.ENDPOINT_FILTER && frameMeta.addrFormat !== 3 && isReservedAddress(targetHost)) {

@@ -34,8 +34,8 @@ const CONFIG = {
     OBFUSCATE_MAX: parseInt(process.env.OBFUSCATE_MAX, 10) || 16384,   // 最大帧 16KB
     OBFUSCATE_FIXED_SIZE: parseInt(process.env.OBFUSCATE_FIXED_SIZE, 10) || 4096, // fixed模式帧大小
     // 入站混淆：缓冲+合并+随机延迟（客户端→上游方向）
-    // 默认开启，使用保守参数（5ms延迟），对握手几乎无影响
-    OBFUSCATE_INBOUND: process.env.OBFUSCATE_INBOUND !== '0' && process.env.OBFUSCATE_INBOUND !== 'false',
+    // 默认关闭（PaaS容器环境下定时器可能有差异，确认连接稳定后通过 OBFUSCATE_INBOUND=1 开启）
+    OBFUSCATE_INBOUND: process.env.OBFUSCATE_INBOUND === '1' || process.env.OBFUSCATE_INBOUND === 'true',
     OBFUSCATE_DELAY_MAX: parseInt(process.env.OBFUSCATE_DELAY_MAX, 10) || 5, // 随机延迟上限 ms（保守5ms）
     OBFUSCATE_FLUSH_INTERVAL: parseInt(process.env.OBFUSCATE_FLUSH_INTERVAL, 10) || 5, // 入站缓冲兜底刷新间隔 ms
     OBFUSCATE_BUFFER_MAX: parseInt(process.env.OBFUSCATE_BUFFER_MAX, 10) || 32768 // 入站缓冲上限 32KB
