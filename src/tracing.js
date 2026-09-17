@@ -227,8 +227,9 @@ async function getTraceReport(options = {}) {
     return report;
 }
 
-// 处理追踪 HTTP 请求
-async function handleTraceRequest(req, res) {
+// 处理追踪 HTTP 请求（同步判断端点，异步生成报告）
+// 注意：必须同步返回 true/false，否则 async 函数返回的 Promise 在 if 条件中总是 truthy
+function handleTraceRequest(req, res) {
     const url = new URL(req.url, 'http://localhost');
     const path = url.pathname;
 
@@ -257,14 +258,19 @@ async function handleTraceRequest(req, res) {
     const includeConnections = url.searchParams.get('connections') !== 'false';
     const includeSystem = url.searchParams.get('system') !== 'false';
 
-    const report = await getTraceReport({ limit, includeConnections, includeSystem });
-
-    res.writeHead(200, {
-        'Content-Type': 'application/json; charset=utf-8',
-        'Cache-Control': 'no-store',
-        'X-Trace-Id': report.traceId
+    // 异步生成报告并发送响应
+    getTraceReport({ limit, includeConnections, includeSystem }).then(report => {
+        res.writeHead(200, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'no-store',
+            'X-Trace-Id': report.traceId
+        });
+        res.end(JSON.stringify(report, null, 2));
+    }).catch(err => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Internal Server Error', message: err.message }));
     });
-    res.end(JSON.stringify(report, null, 2));
+
     return true;
 }
 
