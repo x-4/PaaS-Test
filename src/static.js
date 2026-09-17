@@ -188,11 +188,83 @@ const NOT_FOUND_HTML = `<!DOCTYPE html>
 </body>
 </html>`;
 
+// ---- CDN 静态资源（模拟 CDN 域名资源，长缓存 7 天）----
+
+const CDN_CSS = `/* SyncFlow Application Styles */
+:root { --primary: #2563eb; --success: #10b981; --warning: #f59e0b; --danger: #ef4444; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 0; background: #f8fafc; }
+.container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+.card { background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 24px; margin-bottom: 20px; }
+.btn { padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-weight: 500; }
+.btn-primary { background: var(--primary); color: white; }
+.btn-success { background: var(--success); color: white; }
+.table { width: 100%; border-collapse: collapse; }
+.table th, .table td { padding: 12px; text-align: left; border-bottom: 1px solid #e2e8f0; }
+.badge { padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+.badge-success { background: #d1fae5; color: #065f46; }
+.badge-warning { background: #fef3c7; color: #92400e; }
+.badge-danger { background: #fee2e2; color: #991b1b; }
+`;
+
+const CDN_JS = `/* SyncFlow Application Script */
+const SyncFlow = {
+  version: '1.0.0',
+  init: function() { console.log('[SyncFlow] Application initialized'); },
+  formatNumber: function(n) { return n.toLocaleString(); },
+  formatDate: function(d) { return new Date(d).toLocaleString(); },
+  refreshData: function(url, callback) { fetch(url).then(r => r.json()).then(callback); },
+  showNotification: function(msg, type) { console.log('[SyncFlow] Notification:', type, msg); }
+};
+document.addEventListener('DOMContentLoaded', function() { SyncFlow.init(); });
+`;
+
+const CDN_LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 40"><rect width="120" height="40" rx="8" fill="#2563eb"/><text x="60" y="26" text-anchor="middle" fill="white" font-family="Arial" font-size="18" font-weight="bold">SyncFlow</text></svg>`;
+
+const CDN_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="#2563eb"/><path d="M16 24 L32 16 L48 24 L48 40 L32 48 L16 40 Z" fill="none" stroke="white" stroke-width="3"/><path d="M24 32 L40 32 M32 24 L32 40" stroke="white" stroke-width="3" stroke-linecap="round"/></svg>`;
+
+// CDN 资源映射（支持版本化路径）
+const CDN_RESOURCES = {
+    '/cdn/css/app.css': { content: CDN_CSS, type: 'text/css; charset=utf-8' },
+    '/cdn/css/app.v1.0.0.css': { content: CDN_CSS, type: 'text/css; charset=utf-8' },
+    '/cdn/js/app.js': { content: CDN_JS, type: 'application/javascript; charset=utf-8' },
+    '/cdn/js/app.v1.0.0.js': { content: CDN_JS, type: 'application/javascript; charset=utf-8' },
+    '/cdn/img/logo.svg': { content: CDN_LOGO_SVG, type: 'image/svg+xml' },
+    '/cdn/img/icon.svg': { content: CDN_ICON_SVG, type: 'image/svg+xml' },
+    '/cdn/img/favicon.svg': { content: FAVICON_SVG, type: 'image/svg+xml' },
+};
+
+function handleCdnResource(path, res) {
+    const resource = CDN_RESOURCES[path];
+    if (resource) {
+        res.writeHead(200, {
+            'Content-Type': resource.type,
+            'Cache-Control': 'public, max-age=604800, immutable', // 7 天长缓存
+            'Access-Control-Allow-Origin': '*', // CDN 跨域头
+            'X-CDN': 'SyncFlow-CDN/1.0',
+        });
+        res.end(resource.content);
+        return true;
+    }
+    // CDN 资源不存在，返回 404（带 CDN 头）
+    res.writeHead(404, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Cache-Control': 'public, max-age=60',
+        'X-CDN': 'SyncFlow-CDN/1.0',
+    });
+    res.end('404 Not Found');
+    return true;
+}
+
 function handleStaticRequest(req, res) {
     const url = new URL(req.url, 'http://localhost');
     const path = url.pathname;
 
     if (req.method !== 'GET') return null;
+
+    // CDN 静态资源（模拟 CDN 域名资源，长缓存）
+    if (path.startsWith('/cdn/')) {
+        return handleCdnResource(path, res);
+    }
 
     const staticFiles = {
         '/favicon.ico': { content: FAVICON_SVG, type: 'image/svg+xml', cache: 'public, max-age=86400' },

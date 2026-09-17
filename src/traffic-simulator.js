@@ -127,41 +127,63 @@ const SIMULATED_ENDPOINTS = [
 
 // ---- 用户会话模板（连续请求多个相关端点，模拟真实用户操作流程）----
 const USER_SESSIONS = [
-    // 浏览库存
+    // 浏览库存（含页面访问+搜索）
     [
         { path: '/', method: 'GET' },
-        { path: '/api/v1/inventory', method: 'GET' },
+        { path: '/cdn/css/app.v1.0.0.css', method: 'GET' },
+        { path: '/cdn/js/app.v1.0.0.js', method: 'GET' },
+        { path: '/inventory', method: 'GET' },
+        { path: '/api/v1/inventory?page=1&limit=20&search=laptop', method: 'GET' },
         { path: '/api/v1/inventory/SKU-10001', method: 'GET' },
         { path: '/api/v1/warehouses', method: 'GET' },
+        { path: '/collect', method: 'POST', body: () => JSON.stringify({ v: 1, tid: 'G-XXXXXXXXXX', cid: '123456.789012', t: 'pageview', dp: '/inventory' }) },
     ],
-    // 管理同步任务
+    // 管理同步任务（含页面访问+创建任务）
     [
         { path: '/dashboard', method: 'GET' },
+        { path: '/cdn/img/logo.svg', method: 'GET' },
         { path: '/api/v1/sync/jobs', method: 'GET' },
+        { path: '/sync', method: 'GET' },
         { path: '/api/v1/sync/jobs', method: 'POST', body: generateSyncJobBody },
         { path: '/api/v1/metrics', method: 'GET' },
+        { path: '/collect', method: 'POST', body: () => JSON.stringify({ v: 1, tid: 'G-XXXXXXXXXX', cid: '234567.890123', t: 'event', ec: 'sync', ea: 'create_job' }) },
     ],
-    // 仓库管理
+    // 仓库管理（含页面访问+筛选）
     [
         { path: '/', method: 'GET' },
-        { path: '/api/v1/warehouses', method: 'GET' },
+        { path: '/warehouses', method: 'GET' },
+        { path: '/api/v1/warehouses?region=us-east&status=active', method: 'GET' },
         { path: '/api/v1/warehouses', method: 'POST', body: generateWarehouseBody },
         { path: '/api/v1/warehouses/WH-EU-001', method: 'GET' },
+        { path: '/api/v1/errors', method: 'POST', body: () => JSON.stringify({ event_id: 'evt_' + Date.now(), timestamp: new Date().toISOString(), platform: 'javascript', sdk: { name: 'sentry.javascript.browser', version: '7.91.0' }, exception: { values: [{ type: 'Error', value: 'Test error report', stacktrace: { frames: [] } }] } }) },
     ],
-    // 库存操作
+    // 库存操作（含页面访问+搜索+更新）
     [
         { path: '/inventory', method: 'GET' },
-        { path: '/api/v1/inventory', method: 'GET' },
+        { path: '/cdn/css/app.css', method: 'GET' },
+        { path: '/api/v1/inventory?category=electronics&sort=price_asc', method: 'GET' },
         { path: '/api/v1/inventory', method: 'POST', body: generateInventoryBody },
         { path: '/api/v1/inventory/SKU-10001', method: 'PUT', body: generateInventoryUpdateBody },
         { path: '/api/v1/inventory/stats', method: 'GET' },
+        { path: '/collect', method: 'POST', body: () => JSON.stringify({ v: 1, tid: 'G-XXXXXXXXXX', cid: '345678.901234', t: 'event', ec: 'inventory', ea: 'update_item' }) },
     ],
-    // 查看监控
+    // 查看监控（含页面访问+多端点）
     [
         { path: '/dashboard', method: 'GET' },
+        { path: '/cdn/js/app.js', method: 'GET' },
         { path: '/api/v1/metrics', method: 'GET' },
         { path: '/health', method: 'GET' },
         { path: '/api/v1/inventory?page=1&limit=20', method: 'GET' },
+        { path: '/settings', method: 'GET' },
+        { path: '/about', method: 'GET' },
+    ],
+    // 文档浏览（含页面访问+搜索）
+    [
+        { path: '/docs', method: 'GET' },
+        { path: '/cdn/img/icon.svg', method: 'GET' },
+        { path: '/api/docs/openapi.json', method: 'GET' },
+        { path: '/api/v1/inventory?search=warehouse', method: 'GET' },
+        { path: '/collect', method: 'POST', body: () => JSON.stringify({ v: 1, tid: 'G-XXXXXXXXXX', cid: '456789.012345', t: 'pageview', dp: '/docs' }) },
     ],
 ];
 

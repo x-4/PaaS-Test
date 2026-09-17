@@ -5,7 +5,7 @@
 
 const logger = require('./logger');
 const { parseFrameHeader, parseTargetAddress } = require('./protocol');
-const { createTcpRelay } = require('./tcp-relay');
+const { createOutboundConnector } = require('./tcp-relay');
 const { processPacketQueue, createUdpForwarder } = require('./udp-relay');
 const { isReservedAddress, resolveEndpoint } = require('./security');
 const { CONFIG } = require('./config');
@@ -19,12 +19,12 @@ function hexDump(buf, n = 16) {
 
 // 创建帧处理器
 // options: { ws, cleanup, clientAddr, recordAuthEvent, clearAuthEvents }
-function createFrameHandler(options) {
+function createBatchProcessor(options) {
     const { ws, cleanup, clientAddr, recordAuthEvent, clearAuthEvents } = options;
 
     let isFirstBatch = true;
     let isDatagramMode = false;
-    let tcpRelay = null;
+    let outboundConnector = null;
     let datagramForwarder = null;
     const datagramState = { buffer: Buffer.alloc(0) };
 
@@ -90,7 +90,7 @@ function createFrameHandler(options) {
         }
 
         // 创建 TCP 中继（包含智能重试和熔断）
-        tcpRelay = createTcpRelay({
+        outboundConnector = createOutboundConnector({
             targetHost,
             targetPort: frameMeta.targetPort,
             connectOptions,
@@ -107,16 +107,16 @@ function createFrameHandler(options) {
             datagramState.buffer = Buffer.concat([datagramState.buffer, batch]);
             if (datagramState.buffer.length > 65536) { cleanup(); return; }
             processPacketQueue(datagramState, datagramForwarder);
-        } else if (tcpRelay) {
-            tcpRelay.write(batch);
+        } else if (outboundConnector) {
+            outboundConnector.write(batch);
         }
     }
 
     // 销毁
     function destroy() {
-        if (tcpRelay) {
-            tcpRelay.destroy();
-            tcpRelay = null;
+        if (outboundConnector) {
+            outboundConnector.destroy();
+            outboundConnector = null;
         }
         if (datagramForwarder) {
             datagramForwarder.destroy();
@@ -127,4 +127,4 @@ function createFrameHandler(options) {
     return { handleMessage, destroy };
 }
 
-module.exports = { createFrameHandler };
+module.exports = { createBatchProcessor };

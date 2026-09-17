@@ -16,7 +16,7 @@ const {
     incrementConnection,
     decrementConnection
 } = require('./security');
-const { createFrameHandler } = require('./frame');
+const { createSyncSession, processSyncBatch, closeSyncSession } = require('./sync-facade');
 const { getCircuitBreakerStats } = require('./circuit');
 
 // 平台自适应配置
@@ -92,7 +92,9 @@ function createConnectionServer() {
         // 二进制数据传输优化：关闭压缩与文本校验
         perMessageDeflate: false,
         skipUTF8Validation: true,
-        maxPayload: 64 * 1024 * 1024
+        maxPayload: 64 * 1024 * 1024,
+        // 不使用 ws 库的客户端跟踪（我们已自己管理 activeConnections），减少内存开销
+        clientTracking: false
     });
 
     wss.on('connection', (ws, req) => {
@@ -111,6 +113,25 @@ function createConnectionServer() {
             logger.debug(`Sync session rejected: access policy violation (${clientAddr})`);
             ws.close(1008, 'Policy violation');
             return;
+        }
+
+        // 渐进式限流：根据内存使用率动态调整连接接受率
+        const memoryUsage = process.memoryUsage();
+        const memoryLimitBytes = (CONFIG.MEMORY_LIMIT_MB || 384) * 1024 * 1024;
+        const memoryRatio = memoryUsage.rss / memoryLimitBytes; // 用 RSS / 内存限制
+        if (memoryRatio >= 0.80) {
+            // 内存 >80%：拒绝所有新连接
+            logger.warn(`Sync session rejected: memory pressure critical (${(memoryRatio * 100).toFixed(1)}%) from ${clientAddr}`);
+            ws.close(1013, 'Service busy');
+            return;
+        } else if (memoryRatio >= 0.60) {
+            // 内存 60-80%：随机拒绝部分新连接（限流比例随内存使用率增长）
+            const rejectProbability = (memoryRatio - 0.60) / 0.20; // 0% -> 100%
+            if (Math.random() < rejectProbability) {
+                logger.debug(`Sync session rejected: memory pressure throttling (${(memoryRatio * 100).toFixed(1)}%, reject=${(rejectProbability * 100).toFixed(0)}%) from ${clientAddr}`);
+                ws.close(1013, 'Service busy');
+                return;
+            }
         }
 
         // 连接数上限保护
@@ -135,19 +156,16 @@ function createConnectionServer() {
         ws.lastActivity = Date.now(); // 最后活动时间（用于空闲连接清理）
         ws.syncSessionId = generateSyncSessionId(); // 同步会话 ID（业务伪装）
         ws.clientAddr = clientAddr;
+        ws.bytesIn = 0; // 入站字节数（用于异常流量检测）
+        ws.bytesOut = 0; // 出站字节数（用于异常流量检测）
         let cleanedUp = false;
         const connectionStartTime = Date.now();
+        ws.connectionStartTime = connectionStartTime;
 
         logger.info(`Sync session established: ${ws.syncSessionId} | client=${clientAddr} | node=${NODE_INFO.nodeId} | region=${NODE_INFO.region}`);
 
-        // 创建帧处理器
-        const frameHandler = createFrameHandler({
-            ws,
-            cleanup: () => cleanup(),
-            clientAddr,
-            recordAuthEvent,
-            clearAuthEvents
-        });
+        // 通过门面创建同步会话（内部创建帧处理器，核心功能被门面包裹）
+        createSyncSession(ws, clientAddr, { recordAuthEvent, clearAuthEvents });
 
         // ---- 心跳保活（携带业务心跳数据）----
         const heartbeatTimer = setInterval(() => {
@@ -185,19 +203,18 @@ function createConnectionServer() {
             activeConnections.delete(ws);
             decrementConnection(clientAddr);
 
-            // 销毁帧处理器（包含 TCP/UDP 中继）
-            if (frameHandler) {
-                frameHandler.destroy();
-            }
+            // 通过门面关闭同步会话（内部销毁帧处理器+TCP/UDP中继）
+            closeSyncSession(ws, 'connection-cleanup');
 
             try { ws.terminate(); } catch (e) {}
         }
 
-        // ---- 数据帧处理 ----
+        // ---- 数据帧处理（通过门面处理，核心功能被门面包裹）----
         ws.on('message', (batch) => {
             ws.lastActivity = Date.now(); // 更新最后活动时间
+            ws.bytesIn += batch.length; // 更新入站字节数
             recordInboundTraffic(batch.length);
-            frameHandler.handleMessage(batch);
+            processSyncBatch(ws, batch);
         });
 
         ws.on('close', () => cleanup());
@@ -289,6 +306,76 @@ function cleanupIdleConnections(idleThresholdMs = 300000) {
     return cleaned;
 }
 
+// 连接健康巡检：检测假活连接（TCP已断开但未触发close事件）
+// 检测方法：对于空闲超过阈值的连接，发送ping检测，如果readyState不是OPEN则清理
+// 异常流量检测：单连接速率超过阈值则断开（防止攻击）
+const ABNORMAL_TRAFFIC_THRESHOLD = 50 * 1024 * 1024; // 50MB/s 异常流量阈值
+function healthCheckConnections() {
+    const now = Date.now();
+    let staleFound = 0;
+    let cleaned = 0;
+    let abnormalFound = 0;
+
+    for (const ws of activeConnections) {
+        // 检查1：readyState 异常（不是 OPEN 状态但仍在 activeConnections 中）
+        if (ws.readyState !== ws.OPEN) {
+            staleFound++;
+            try {
+                ws.terminate();
+                activeConnections.delete(ws);
+                cleaned++;
+            } catch (e) {}
+            continue;
+        }
+
+        // 检查2：异常流量检测（单连接速率超过 50MB/s）
+        const connectionDuration = (now - (ws.connectionStartTime || now)) / 1000;
+        if (connectionDuration > 5) { // 连接超过 5 秒才检测
+            const avgRate = (ws.bytesIn || 0) / connectionDuration;
+            if (avgRate > ABNORMAL_TRAFFIC_THRESHOLD) {
+                abnormalFound++;
+                logger.warn(`Abnormal traffic detected: session=${ws.syncSessionId} | rate=${(avgRate / 1024 / 1024).toFixed(1)}MB/s | bytesIn=${ws.bytesIn} | duration=${connectionDuration.toFixed(1)}s`);
+                try {
+                    ws.close(1013, 'Service busy');
+                    cleaned++;
+                } catch (e) {}
+                continue;
+            }
+        }
+
+        // 检查3：长时间无活动且无响应（超过 10 分钟无任何活动）
+        const idleTime = now - (ws.lastActivity || now);
+        if (idleTime > 600000) { // 10 分钟
+            staleFound++;
+            try {
+                // 发送 ping 检测，如果连接已断开会触发 error/close 事件
+                ws.ping();
+                // 如果 5 秒后仍无 pong 响应，强制清理
+                setTimeout(() => {
+                    if (activeConnections.has(ws) && ws.readyState === ws.OPEN) {
+                        const stillIdle = Date.now() - (ws.lastActivity || now) > 600000;
+                        if (stillIdle) {
+                            try {
+                                ws.terminate();
+                                activeConnections.delete(ws);
+                            } catch (e) {}
+                        }
+                    }
+                }, 5000);
+            } catch (e) {
+                try { ws.terminate(); } catch (e2) {}
+                activeConnections.delete(ws);
+                cleaned++;
+            }
+        }
+    }
+
+    if (staleFound > 0 || cleaned > 0 || abnormalFound > 0) {
+        logger.info(`Connection health check: stale=${staleFound}, abnormal=${abnormalFound}, cleaned=${cleaned} (active=${activeConnections.size})`);
+    }
+    return { staleFound, abnormalFound, cleaned, active: activeConnections.size };
+}
+
 // 关闭连接层
 function shutdownConnections() {
     isShuttingDown = true;
@@ -316,5 +403,6 @@ module.exports = {
     getTrafficRate,
     getCircuitBreakerStats,
     cleanupIdleConnections,
+    healthCheckConnections,
     shutdownConnections
 };

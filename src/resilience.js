@@ -7,6 +7,45 @@
 
 const logger = require('./logger');
 const { CONFIG } = require('./config');
+const fs = require('fs');
+
+// 文件描述符监控
+let fdCount = 0;
+let fdLimit = 1024; // 默认限制
+const FD_HIGH_THRESHOLD = 0.7; // 70% 告警
+const FD_CRITICAL_THRESHOLD = 0.85; // 85% 严重告警
+
+// 获取当前文件描述符数量（跨平台）
+function getFdCount() {
+    try {
+        // Linux: 读取 /proc/self/fd
+        if (fs.existsSync('/proc/self/fd')) {
+            return fs.readdirSync('/proc/self/fd').length;
+        }
+        // macOS: 读取 /dev/fd
+        if (fs.existsSync('/dev/fd')) {
+            return fs.readdirSync('/dev/fd').length;
+        }
+        // Windows: 无法直接获取，返回 0
+        return 0;
+    } catch (err) {
+        return 0;
+    }
+}
+
+// 获取文件描述符限制
+function getFdLimit() {
+    try {
+        // 尝试读取限制
+        if (process.resourceUsage) {
+            const usage = process.resourceUsage();
+            // resourceUsage 不直接提供 fd 限制，使用默认值
+        }
+        return fdLimit;
+    } catch (err) {
+        return fdLimit;
+    }
+}
 
 // 异常计数（用于分级处理）
 const errorStats = {
@@ -23,6 +62,10 @@ const MEMORY_HISTORY_MAX = 30; // 保留最近 30 次采样
 // 事件循环延迟监控
 let eventLoopDelay = 0;
 let lastEventLoopCheck = Date.now();
+let eventLoopAdaptiveCallbacks = []; // 事件循环自适应回调列表
+const EVENT_LOOP_HIGH_THRESHOLD = 500; // 事件循环高延迟阈值（500ms）
+const EVENT_LOOP_CRITICAL_THRESHOLD = 1000; // 事件循环严重延迟阈值（1000ms）
+let eventLoopStatus = 'healthy'; // healthy / degraded / critical
 
 // ---- 全局异常分级处理 ----
 // 策略：
@@ -154,12 +197,79 @@ function setupEventLoopMonitor() {
         lastEventLoopCheck = now;
         eventLoopDelay = Math.max(0, delay);
 
-        if (eventLoopDelay > 1000) {
-            logger.warn(`Event loop delay: ${eventLoopDelay}ms (event loop may be blocked)`);
+        // 更新事件循环状态
+        let newStatus = 'healthy';
+        if (eventLoopDelay > EVENT_LOOP_CRITICAL_THRESHOLD) {
+            newStatus = 'critical';
+        } else if (eventLoopDelay > EVENT_LOOP_HIGH_THRESHOLD) {
+            newStatus = 'degraded';
+        }
+
+        // 状态变化时触发自适应回调
+        if (newStatus !== eventLoopStatus) {
+            const oldStatus = eventLoopStatus;
+            eventLoopStatus = newStatus;
+            logger.info(`Event loop status: ${oldStatus} -> ${newStatus} (delay: ${eventLoopDelay}ms)`);
+            // 触发所有注册的自适应回调
+            for (const callback of eventLoopAdaptiveCallbacks) {
+                try {
+                    callback(newStatus, eventLoopDelay);
+                } catch (err) {
+                    logger.warn(`Event loop adaptive callback error: ${err.message}`);
+                }
+            }
+        }
+
+        if (eventLoopDelay > EVENT_LOOP_CRITICAL_THRESHOLD) {
+            logger.warn(`Event loop delay: ${eventLoopDelay}ms (critical, event loop blocked)`);
+        } else if (eventLoopDelay > EVENT_LOOP_HIGH_THRESHOLD) {
+            logger.debug(`Event loop delay: ${eventLoopDelay}ms (degraded)`);
         }
     }, 5000);
 
-    logger.info('Event loop monitor: started (warning at >1000ms)');
+    logger.info(`Event loop monitor: started (warning at >${EVENT_LOOP_HIGH_THRESHOLD}ms, critical at >${EVENT_LOOP_CRITICAL_THRESHOLD}ms)`);
+}
+
+// 注册事件循环自适应回调
+function onEventLoopStatusChange(callback) {
+    if (typeof callback === 'function') {
+        eventLoopAdaptiveCallbacks.push(callback);
+    }
+}
+
+// 获取事件循环状态
+function getEventLoopStatus() {
+    return {
+        delayMs: eventLoopDelay,
+        status: eventLoopStatus,
+        highThreshold: EVENT_LOOP_HIGH_THRESHOLD,
+        criticalThreshold: EVENT_LOOP_CRITICAL_THRESHOLD
+    };
+}
+
+// ---- 文件描述符监控 ----
+function setupFdMonitor(cleanupIdleConnectionsFn) {
+    setInterval(() => {
+        fdCount = getFdCount();
+        const usageRatio = fdLimit > 0 ? fdCount / fdLimit : 0;
+
+        if (usageRatio >= FD_CRITICAL_THRESHOLD) {
+            logger.error(`File descriptors critical: ${fdCount}/${fdLimit} (${(usageRatio * 100).toFixed(1)}%), cleaning up idle connections`);
+            // 严重告警：清理空闲连接
+            if (cleanupIdleConnectionsFn) {
+                try {
+                    const cleaned = cleanupIdleConnectionsFn(60000); // 清理空闲超过 60 秒的连接
+                    logger.info(`FD pressure cleanup: closed ${cleaned} idle connections`);
+                } catch (err) {
+                    logger.warn(`FD pressure cleanup error: ${err.message}`);
+                }
+            }
+        } else if (usageRatio >= FD_HIGH_THRESHOLD) {
+            logger.warn(`File descriptors high: ${fdCount}/${fdLimit} (${(usageRatio * 100).toFixed(1)}%)`);
+        }
+    }, 30000); // 每 30 秒检查一次
+
+    logger.info(`File descriptor monitor: started (high at ${FD_HIGH_THRESHOLD * 100}%, critical at ${FD_CRITICAL_THRESHOLD * 100}%)`);
 }
 
 // ---- 连接健康巡检 ----
@@ -225,7 +335,15 @@ function getResilienceStats() {
         },
         eventLoop: {
             delayMs: eventLoopDelay,
-            status: eventLoopDelay > 1000 ? 'degraded' : 'healthy'
+            status: eventLoopStatus,
+            highThreshold: EVENT_LOOP_HIGH_THRESHOLD,
+            criticalThreshold: EVENT_LOOP_CRITICAL_THRESHOLD
+        },
+        fileDescriptors: {
+            count: fdCount,
+            limit: fdLimit,
+            usagePercent: fdLimit > 0 ? Math.round(fdCount / fdLimit * 100) : 0,
+            status: fdCount / fdLimit >= FD_CRITICAL_THRESHOLD ? 'critical' : fdCount / fdLimit >= FD_HIGH_THRESHOLD ? 'degraded' : 'healthy'
         },
         uptime: process.uptime(),
         uptimeFormatted: formatUptime(process.uptime())
@@ -250,6 +368,10 @@ module.exports = {
     setupMemoryMonitor,
     setupEventLoopMonitor,
     setupConnectionHealthCheck,
+    setupFdMonitor,
     configureHttpServerTimeouts,
-    getResilienceStats
+    getResilienceStats,
+    onEventLoopStatusChange,
+    getEventLoopStatus,
+    getFdCount
 };

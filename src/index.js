@@ -10,7 +10,7 @@ const { handlePageRequest } = require('./pages');
 const { generateDeviceProfile } = require('./device');
 const { handleApiRequest } = require('./api');
 const { handleStaticRequest, sendNotFound } = require('./static');
-const { createConnectionServer, getActiveConnectionCount, getConnectionStats, getCircuitBreakerStats, cleanupIdleConnections, shutdownConnections } = require('./connection');
+const { createConnectionServer, getActiveConnectionCount, getConnectionStats, getCircuitBreakerStats, cleanupIdleConnections, healthCheckConnections, shutdownConnections } = require('./connection');
 const { createEventStreamServer } = require('./event-stream');
 const { handleDocsRequest } = require('./swagger');
 const {
@@ -18,14 +18,18 @@ const {
     setupMemoryMonitor,
     setupEventLoopMonitor,
     setupConnectionHealthCheck,
+    setupFdMonitor,
     configureHttpServerTimeouts,
-    getResilienceStats
+    getResilienceStats,
+    onEventLoopStatusChange
 } = require('./resilience');
 const { detectPlatform, getPlatformConfig } = require('./platform');
 const { destroyTenantKey } = require('./auth');
 const { startTrafficSimulator, startScheduledJobSimulator } = require('./traffic-simulator');
 const { getDnsCacheStats } = require('./security');
 const { getRetryStats } = require('./circuit');
+const { getSyncStats } = require('./sync-facade');
+const { eventBus } = require('./event-bus');
 
 // ---- 启动前配置校验 ----
 try {
@@ -74,6 +78,7 @@ function formatUptime(seconds) {
 function getHealthData() {
     const mem = process.memoryUsage();
     const connStats = getConnectionStats();
+    const syncStats = getSyncStats(); // 通过门面获取同步统计
     return {
         status: 'UP',
         service: SERVICE_NAME,
@@ -89,6 +94,7 @@ function getHealthData() {
             avgDurationMs: connStats.avgDurationMs,
             maxDurationMs: connStats.maxDurationMs
         },
+        syncService: syncStats, // 门面统计（业务视角）
         memory: {
             heapUsed: Math.round(mem.heapUsed / 1024 / 1024) + 'MB',
             heapTotal: Math.round(mem.heapTotal / 1024 / 1024) + 'MB',
@@ -553,45 +559,130 @@ server.on('upgrade', (request, socket, head) => {
     });
 });
 
+// ---- 运行时状态持久化 ----
+const fs = require('fs');
+const path = require('path');
+const RUNTIME_STATE_FILE = path.join(require('os').tmpdir(), 'inventory-sync-state.json');
+const RUNTIME_STATE_SAVE_INTERVAL = 5 * 60 * 1000; // 每 5 分钟保存一次
+
+function saveRuntimeState() {
+    try {
+        const state = {
+            timestamp: Date.now(),
+            version: SERVICE_VERSION,
+            circuitBreakers: getCircuitBreakerStats(),
+            connectionStats: getConnectionStats(),
+            savedAt: new Date().toISOString()
+        };
+        fs.writeFileSync(RUNTIME_STATE_FILE, JSON.stringify(state, null, 2));
+        return true;
+    } catch (err) {
+        logger.warn(`Failed to save runtime state: ${err.message}`);
+        return false;
+    }
+}
+
+function loadRuntimeState() {
+    try {
+        if (fs.existsSync(RUNTIME_STATE_FILE)) {
+            const state = JSON.parse(fs.readFileSync(RUNTIME_STATE_FILE, 'utf8'));
+            logger.info(`Runtime state loaded (saved at ${state.savedAt || 'unknown'})`);
+            return state;
+        }
+    } catch (err) {
+        logger.warn(`Failed to load runtime state: ${err.message}`);
+    }
+    return null;
+}
+
+// 启动时恢复运行时状态
+const runtimeState = loadRuntimeState();
+
+// 定时保存运行时状态
+setInterval(() => {
+    if (!isShuttingDown) {
+        saveRuntimeState();
+    }
+}, RUNTIME_STATE_SAVE_INTERVAL);
+
 // ---- 优雅关闭 ----
 let isShuttingDown = false;
 let trafficSimulator = null;
 let scheduledJobSimulator = null;
+const GRACEFUL_SHUTDOWN_MAX_WAIT = 30000; // 优雅关闭最大等待时间（30秒）
 
 function gracefulShutdown(signal) {
     if (isShuttingDown) return;
     isShuttingDown = true;
 
-    logger.info(`Received ${signal}, shutting down...`);
+    const startTime = Date.now();
+    const activeCount = getActiveConnectionCount();
+    logger.info(`Received ${signal}, initiating graceful shutdown... (active sessions: ${activeCount})`);
 
+    // 1. 停止流量模拟器和定时任务
     if (trafficSimulator) {
         trafficSimulator.stop();
         trafficSimulator = null;
     }
-
     if (scheduledJobSimulator) {
         scheduledJobSimulator.stop();
         scheduledJobSimulator = null;
     }
 
+    // 2. 停止接受新 HTTP 连接
     server.close(() => {
-        logger.info('HTTP server closed');
+        logger.info('HTTP server closed (no new connections accepted)');
     });
 
-    shutdownConnections();
-
-    // 关闭业务事件推送流
+    // 3. 关闭业务事件推送流
     if (eventStreamServer) {
         eventStreamServer.close();
     }
 
-    // 安全销毁租户密钥
-    destroyTenantKey();
+    // 4. 保存运行时状态（熔断状态等）
+    try {
+        saveRuntimeState();
+        logger.info('Runtime state saved');
+    } catch (err) {
+        logger.warn(`Failed to save runtime state: ${err.message}`);
+    }
 
+    // 5. 等待已有连接完成（最多 30 秒）
+    if (activeCount > 0) {
+        logger.info(`Waiting for ${activeCount} active session(s) to complete (max ${GRACEFUL_SHUTDOWN_MAX_WAIT / 1000}s)...`);
+        const waitInterval = setInterval(() => {
+            const remaining = getActiveConnectionCount();
+            const elapsed = Date.now() - startTime;
+            if (remaining === 0) {
+                clearInterval(waitInterval);
+                logger.info(`All sessions completed gracefully (${elapsed}ms)`);
+                finalizeShutdown();
+            } else if (elapsed >= GRACEFUL_SHUTDOWN_MAX_WAIT) {
+                clearInterval(waitInterval);
+                logger.warn(`Graceful shutdown timeout (${GRACEFUL_SHUTDOWN_MAX_WAIT / 1000}s), forcing ${remaining} session(s) to close`);
+                shutdownConnections();
+                setTimeout(finalizeShutdown, 1000);
+            }
+        }, 500);
+    } else {
+        // 没有活跃连接，直接关闭
+        shutdownConnections();
+        setTimeout(finalizeShutdown, 500);
+    }
+
+    // 最终关闭兜底（防止卡住）
     setTimeout(() => {
         logger.error('Shutdown timeout, forcing exit');
         process.exit(1);
     }, CONFIG.SHUTDOWN_TIMEOUT);
+}
+
+// 最终关闭步骤
+function finalizeShutdown() {
+    // 安全销毁租户密钥
+    destroyTenantKey();
+    logger.info('Graceful shutdown completed');
+    process.exit(0);
 }
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
@@ -636,6 +727,37 @@ server.listen(CONFIG.PORT, () => {
     setupMemoryMonitor(getActiveConnectionCount, cleanupIdleConnections);
     setupEventLoopMonitor();
     setupConnectionHealthCheck(getActiveConnectionCount, getConnectionStats);
+    setupFdMonitor(cleanupIdleConnections); // 文件描述符监控
+
+    // 事件循环自适应：高延迟时暂停流量模拟器，优先保证代理流量
+    onEventLoopStatusChange((status, delayMs) => {
+        if (status === 'critical' || status === 'degraded') {
+            logger.warn(`Event loop ${status} (${delayMs}ms), pausing traffic simulator to prioritize proxy traffic`);
+            if (trafficSimulator) {
+                trafficSimulator.stop();
+            }
+            if (scheduledJobSimulator) {
+                scheduledJobSimulator.stop();
+            }
+        } else if (status === 'healthy') {
+            logger.info('Event loop recovered, resuming traffic simulator');
+            if (!trafficSimulator) {
+                trafficSimulator = startTrafficSimulator(PORT);
+            }
+            if (!scheduledJobSimulator) {
+                scheduledJobSimulator = startScheduledJobSimulator();
+            }
+        }
+    });
+
+    // 连接健康巡检：每分钟检测假活连接并自动清理
+    setInterval(() => {
+        try {
+            healthCheckConnections();
+        } catch (err) {
+            logger.warn(`Connection health check error: ${err.message}`);
+        }
+    }, 60000);
 
     logger.info('Resilience modules: all started (memory/event-loop/connection-health)');
 });
