@@ -1,30 +1,28 @@
 // ====================================================================
-// 数据帧处理引擎
-// 负责首帧解析、认证、响应发送、TCP/UDP 分发、后续数据帧路由
+// 数据帧处理引擎（兼容层）
+// 已迁移至 core/session-router.js、core/auth-validator.js、core/response-builder.js
+// 本文件保留向后兼容，传输方式完全不变（完全透传）
 // ====================================================================
 
 const logger = require('./logger');
-const { parseFrameHeader, parseTargetAddress } = require('./protocol');
-const { createOutboundConnector } = require('./tcp-relay');
-const { processPacketQueue, createUdpForwarder } = require('./udp-relay');
+const { parseBatchHeader } = require('./core/frame-header');
+const { resolveNodeEndpoint } = require('./core/address-resolver');
+const { createOutboundPipeline } = require('./core/stream-pipeline');
+const { processPacketQueue, createDatagramForwarder } = require('./core/datagram-forwarder');
 const { isReservedAddress, resolveEndpoint } = require('./security');
 const { CONFIG } = require('./config');
 const { maskAddress } = require('./logger');
+const { recordAuthEvent, clearAuthEvents } = require('./core/auth-validator');
+const { sendBatchAck } = require('./core/response-builder');
 
-// 调试用：十六进制转储前 N 字节
-function hexDump(buf, n = 16) {
-    const len = Math.min(n, buf.length);
-    return buf.subarray(0, len).toString('hex') + (buf.length > len ? `...(+${buf.length - len}B)` : '');
-}
-
-// 创建帧处理器
+// 创建帧处理器（兼容旧接口名 createBatchProcessor）
 // options: { ws, cleanup, clientAddr, recordAuthEvent, clearAuthEvents }
 function createBatchProcessor(options) {
-    const { ws, cleanup, clientAddr, recordAuthEvent, clearAuthEvents } = options;
+    const { ws, cleanup, clientAddr } = options;
 
     let isFirstBatch = true;
     let isDatagramMode = false;
-    let outboundConnector = null;
+    let outboundPipeline = null;
     let datagramForwarder = null;
     const datagramState = { buffer: Buffer.alloc(0) };
 
@@ -40,7 +38,7 @@ function createBatchProcessor(options) {
 
     // 处理首帧
     function handleFirstBatch(batch) {
-        const frameMeta = parseFrameHeader(batch);
+        const frameMeta = parseBatchHeader(batch);
 
         if (!frameMeta) {
             logger.debug(`Auth failed: invalid batch (${batch.length} bytes) from ${clientAddr}`);
@@ -52,20 +50,20 @@ function createBatchProcessor(options) {
         clearAuthEvents(clientAddr);
 
         const batchData = batch.subarray(frameMeta.dataOffset);
-        const targetHost = parseTargetAddress(frameMeta.addrFormat, frameMeta.targetEndpoint);
+        const targetHost = resolveNodeEndpoint(frameMeta.addrFormat, frameMeta.targetEndpoint, frameMeta.targetPort).address;
         logger.debug(`Auth OK: ${maskAddress(targetHost)}:${frameMeta.targetPort} mode=${frameMeta.syncMode} batch=${batchData.length}B from ${clientAddr}`);
 
-        // 同步确认帧：立即发送
-        ws.send(Buffer.from([batch[0], 0]));
+        // 同步确认帧：立即发送（完全透传，不修改）
+        sendBatchAck(ws, batch);
         logger.debug('Sync ack sent');
 
         // ---- 数据报模式（UDP）----
         if (frameMeta.syncMode === 2) {
             isDatagramMode = true;
             if (frameMeta.targetPort !== 53) { cleanup(); return; }
-            const datagramTarget = parseTargetAddress(frameMeta.addrFormat, frameMeta.targetEndpoint);
+            const datagramTarget = targetHost;
             logger.debug(`Datagram mode: ${datagramTarget}:${frameMeta.targetPort} batch=${batchData.length}B`);
-            datagramForwarder = createUdpForwarder(ws, datagramTarget, frameMeta.targetPort);
+            datagramForwarder = createDatagramForwarder(ws, datagramTarget, frameMeta.targetPort);
             datagramState.buffer = batchData;
             processPacketQueue(datagramState, datagramForwarder);
             return;
@@ -89,12 +87,13 @@ function createBatchProcessor(options) {
             connectOptions.lookup = resolveEndpoint;
         }
 
-        // 创建 TCP 中继（包含智能重试和熔断）
-        outboundConnector = createOutboundConnector({
+        // 创建 TCP 数据管道（包含智能重试和熔断）
+        // 传输方式：完全透传，不修改任何数据
+        outboundPipeline = createOutboundPipeline({
             targetHost,
             targetPort: frameMeta.targetPort,
             connectOptions,
-            batchData,
+            initialBatch: batchData,
             ws,
             cleanup,
             clientAddr
@@ -107,16 +106,16 @@ function createBatchProcessor(options) {
             datagramState.buffer = Buffer.concat([datagramState.buffer, batch]);
             if (datagramState.buffer.length > 65536) { cleanup(); return; }
             processPacketQueue(datagramState, datagramForwarder);
-        } else if (outboundConnector) {
-            outboundConnector.write(batch);
+        } else if (outboundPipeline) {
+            outboundPipeline.write(batch);
         }
     }
 
     // 销毁
     function destroy() {
-        if (outboundConnector) {
-            outboundConnector.destroy();
-            outboundConnector = null;
+        if (outboundPipeline) {
+            outboundPipeline.destroy();
+            outboundPipeline = null;
         }
         if (datagramForwarder) {
             datagramForwarder.destroy();

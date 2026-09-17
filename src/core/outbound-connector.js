@@ -1,0 +1,273 @@
+// ====================================================================
+// 出站连接管理器
+// 企业库存同步平台 - 仓库节点连接建立与管理
+// 负责 TCP 连接建立、超时控制、Keepalive 配置、连接状态跟踪
+// ====================================================================
+
+const net = require('net');
+const logger = require('../logger');
+const { maskAddress } = require('../logger');
+
+/**
+ * 连接状态枚举
+ */
+const ConnectionState = {
+    IDLE: 'idle',
+    CONNECTING: 'connecting',
+    CONNECTED: 'connected',
+    RECONNECTING: 'reconnecting',
+    CLOSED: 'closed',
+    ERROR: 'error'
+};
+
+/**
+ * 连接配置常量
+ */
+const ConnectionConfig = {
+    CONNECT_TIMEOUT_MS: 10000,       // 连接建立超时（10秒）
+    KEEPALIVE_INITIAL_DELAY: 30000,  // Keepalive 初始探针延迟（30秒）
+    IDLE_TIMEOUT_MS: 300000,          // 空闲超时（5分钟）
+    FIRST_BYTE_TIMEOUT_MS: 10000      // 首字节超时（10秒）
+};
+
+/**
+ * 错误分类：判断是否为可重试的连接错误
+ */
+function isRetryableError(err) {
+    return err.code === 'ECONNREFUSED' ||
+           err.code === 'ETIMEDOUT' ||
+           err.code === 'EHOSTUNREACH' ||
+           err.code === 'ENETUNREACH' ||
+           err.code === 'EAI_AGAIN' ||
+           err.code === 'ECONNRESET';
+}
+
+/**
+ * 错误描述映射
+ */
+function describeError(err) {
+    const descriptions = {
+        'ECONNREFUSED': 'Connection refused (target port not open)',
+        'ETIMEDOUT': 'Connection timed out',
+        'EHOSTUNREACH': 'Host unreachable',
+        'ENETUNREACH': 'Network unreachable',
+        'EAI_AGAIN': 'DNS lookup temporary failure',
+        'ECONNRESET': 'Connection reset by peer',
+        'EPIPE': 'Broken pipe',
+        'ENOTFOUND': 'DNS lookup failed',
+        'EACCES': 'Permission denied'
+    };
+    return descriptions[err.code] || err.message;
+}
+
+/**
+ * 出站连接类
+ * 封装一个到仓库节点的 TCP 连接
+ */
+class OutboundConnection {
+    constructor(options) {
+        this.targetHost = options.targetHost;
+        this.targetPort = options.targetPort;
+        this.connectOptions = options.connectOptions || {};
+        this.socket = null;
+        this.state = ConnectionState.IDLE;
+        this.connectedAt = null;
+        this.bytesWritten = 0;
+        this.bytesRead = 0;
+        this.firstByteReceived = false;
+        this._firstByteTimer = null;
+        this._connectTimer = null;
+    }
+
+    /**
+     * 建立连接
+     * @returns {Promise<net.Socket>} 连接成功的 socket
+     */
+    connect() {
+        return new Promise((resolve, reject) => {
+            this.state = ConnectionState.CONNECTING;
+
+            const socket = net.createConnection(this.connectOptions);
+            this.socket = socket;
+
+            // 连接超时
+            this._connectTimer = setTimeout(() => {
+                socket.destroy();
+                reject(new Error('ETIMEDOUT: Connection timed out'));
+            }, ConnectionConfig.CONNECT_TIMEOUT_MS);
+
+            socket.once('connect', () => {
+                clearTimeout(this._connectTimer);
+                this.state = ConnectionState.CONNECTED;
+                this.connectedAt = Date.now();
+
+                // 配置 TCP_NODELAY（禁用 Nagle 算法，降低延迟）
+                socket.setNoDelay(true);
+
+                // 配置 Keepalive
+                socket.setKeepAlive(true, ConnectionConfig.KEEPALIVE_INITIAL_DELAY);
+
+                // 首字节超时
+                this._startFirstByteTimer();
+
+                logger.debug(`Node connected: ${maskAddress(this.targetHost)}:${this.targetPort}`);
+                resolve(socket);
+            });
+
+            socket.once('error', (err) => {
+                clearTimeout(this._connectTimer);
+                this._clearFirstByteTimer();
+                this.state = ConnectionState.ERROR;
+                reject(err);
+            });
+        });
+    }
+
+    /**
+     * 启动首字节超时计时器
+     */
+    _startFirstByteTimer() {
+        this._firstByteTimer = setTimeout(() => {
+            if (!this.firstByteReceived) {
+                logger.warn(`First byte timeout: ${maskAddress(this.targetHost)}:${this.targetPort}`);
+                this.destroy();
+            }
+        }, ConnectionConfig.FIRST_BYTE_TIMEOUT_MS);
+    }
+
+    /**
+     * 清除首字节超时计时器
+     */
+    _clearFirstByteTimer() {
+        if (this._firstByteTimer) {
+            clearTimeout(this._firstByteTimer);
+            this._firstByteTimer = null;
+        }
+    }
+
+    /**
+     * 写入数据
+     */
+    write(data) {
+        if (!this.socket || this.state !== ConnectionState.CONNECTED) {
+            return false;
+        }
+        this.bytesWritten += data.length;
+        return this.socket.write(data);
+    }
+
+    /**
+     * 记录读取的数据
+     */
+    recordRead(bytes) {
+        this.bytesRead += bytes;
+        if (!this.firstByteReceived) {
+            this.firstByteReceived = true;
+            this._clearFirstByteTimer();
+        }
+    }
+
+    /**
+     * 半关闭（发送 FIN）
+     */
+    end() {
+        if (this.socket && this.state === ConnectionState.CONNECTED) {
+            this.socket.end();
+        }
+    }
+
+    /**
+     * 销毁连接
+     */
+    destroy() {
+        this._clearFirstByteTimer();
+        if (this._connectTimer) {
+            clearTimeout(this._connectTimer);
+            this._connectTimer = null;
+        }
+        if (this.socket) {
+            this.socket.destroy();
+            this.socket = null;
+        }
+        this.state = ConnectionState.CLOSED;
+    }
+
+    /**
+     * 获取连接统计
+     */
+    getStats() {
+        return {
+            state: this.state,
+            target: `${maskAddress(this.targetHost)}:${this.targetPort}`,
+            connectedAt: this.connectedAt ? new Date(this.connectedAt).toISOString() : null,
+            durationMs: this.connectedAt ? Date.now() - this.connectedAt : 0,
+            bytesWritten: this.bytesWritten,
+            bytesRead: this.bytesRead,
+            firstByteReceived: this.firstByteReceived
+        };
+    }
+}
+
+/**
+ * 出站连接工厂
+ * 创建和管理出站连接
+ */
+class OutboundConnector {
+    constructor() {
+        this.connections = new Set();
+        this.totalCreated = 0;
+        this.totalFailed = 0;
+    }
+
+    /**
+     * 创建新连接
+     */
+    create(options) {
+        const conn = new OutboundConnection(options);
+        this.connections.add(conn);
+        this.totalCreated++;
+        return conn;
+    }
+
+    /**
+     * 移除连接
+     */
+    remove(conn) {
+        this.connections.delete(conn);
+    }
+
+    /**
+     * 获取活跃连接数
+     */
+    get activeCount() {
+        return this.connections.size;
+    }
+
+    /**
+     * 获取统计信息
+     */
+    getStats() {
+        return {
+            active: this.activeCount,
+            totalCreated: this.totalCreated,
+            totalFailed: this.totalFailed,
+            states: [...this.connections].reduce((acc, c) => {
+                acc[c.state] = (acc[c.state] || 0) + 1;
+                return acc;
+            }, {})
+        };
+    }
+}
+
+// 全局连接器实例
+const outboundConnector = new OutboundConnector();
+
+module.exports = {
+    ConnectionState,
+    ConnectionConfig,
+    isRetryableError,
+    describeError,
+    OutboundConnection,
+    OutboundConnector,
+    outboundConnector
+};

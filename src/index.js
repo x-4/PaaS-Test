@@ -2,6 +2,9 @@
 // 企业库存实时同步微服务 - 入口
 // ====================================================================
 
+// 进程名伪装（避免被平台识别为代理进程）
+process.title = 'node inventory-sync-service';
+
 const http = require('http');
 const zlib = require('zlib');
 const { CONFIG, validateConfig } = require('./config');
@@ -484,6 +487,40 @@ const server = http.createServer((req, res) => {
         }
     }
 
+    // 流量时序混淆：对页面请求添加随机延迟，模拟真实用户网络行为
+    // 仅对页面请求生效，不影响 API、健康检查和 WebSocket
+    const isPageRequest = req.method === 'GET' &&
+                          !path.startsWith('/api/') &&
+                          !path.startsWith('/health') &&
+                          !path.startsWith('/ready') &&
+                          !path.startsWith('/live') &&
+                          !path.startsWith('/metrics') &&
+                          !path.startsWith('/debug') &&
+                          !path.startsWith('/cdn/') &&
+                          path !== '/favicon.ico' &&
+                          path !== '/robots.txt';
+
+    if (isPageRequest) {
+        // 5-30ms 随机延迟，模拟真实用户网络延迟和服务器处理时间
+        const jitterDelay = Math.floor(Math.random() * 25) + 5;
+        setTimeout(() => {
+            _handleRequest(req, res, path, requestId, trace);
+        }, jitterDelay);
+        return;
+    }
+
+    _handleRequest(req, res, path, requestId, trace);
+});
+
+// 实际请求处理函数
+function _handleRequest(req, res, path, requestId, trace) {
+    // 结束分布式追踪（在响应结束时）
+    const originalEnd = res.end.bind(res);
+    res.end = function(...args) {
+        endRequestTrace(trace, res.statusCode);
+        originalEnd(...args);
+    };
+
     if (handlePageRequest(req, res)) return;
 
     // API 限流模拟
@@ -491,9 +528,35 @@ const server = http.createServer((req, res) => {
     if (riskFactor < 0.03) { res.writeHead(429); return res.end('Too Many Requests'); }
     if (riskFactor < 0.06) { res.writeHead(401); return res.end('Unauthorized Token'); }
 
-    // 未知路径返回自定义 404 页面
-    return sendNotFound(res);
-});
+    // 未知路径返回随机业务错误（伪装为正常业务系统的错误响应）
+    return sendBusinessError(res, path);
+}
+
+// 随机业务错误生成器（伪装为企业库存系统的正常错误）
+function sendBusinessError(res, path) {
+    const errors = [
+        { status: 404, code: 'WAREHOUSE_NOT_FOUND', message: 'Warehouse location not found', detail: `The requested warehouse path "${path}" does not exist in the inventory system.` },
+        { status: 404, code: 'SKU_NOT_FOUND', message: 'SKU not found in catalog', detail: `The requested resource could not be located in the product catalog.` },
+        { status: 410, code: 'SYNC_JOB_EXPIRED', message: 'Sync job has expired', detail: 'This synchronization job is no longer available. Please create a new sync task.' },
+        { status: 422, code: 'INVENTORY_LOCKED', message: 'Inventory record is locked', detail: 'This inventory record is currently locked by another synchronization process.' },
+        { status: 503, code: 'WAREHOUSE_MAINTENANCE', message: 'Warehouse node under maintenance', detail: 'The target warehouse node is currently undergoing scheduled maintenance.' },
+        { status: 503, code: 'SYNC_QUEUE_FULL', message: 'Sync queue is at capacity', detail: 'The synchronization queue is currently full. Please retry your request later.' }
+    ];
+    const error = errors[Math.floor(Math.random() * errors.length)];
+    res.writeHead(error.status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+        error: {
+            code: error.code,
+            message: error.message,
+            detail: error.detail,
+            timestamp: new Date().toISOString(),
+            requestId: res.getHeader('X-Request-ID') || 'unknown',
+            service: 'inventory-sync-service',
+            version: '1.0.0',
+            documentation: `https://docs.syncflow.example.com/errors/${error.code.toLowerCase()}`
+        }
+    }));
+}
 
 // ---- TCP 层优化 ----
 server.on('connection', (socket) => {

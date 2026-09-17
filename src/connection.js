@@ -35,6 +35,30 @@ function generateSyncSessionId() {
     return 'sync_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 8);
 }
 
+// 客户端 IP 脱敏：只存储哈希，不存储原始 IP
+function hashClientAddress(addr) {
+    if (!addr) return 'unknown';
+    const crypto = require('crypto');
+    return crypto.createHash('sha256').update(addr).digest('hex').substring(0, 16);
+}
+
+// 生成随机空闲超时时间（4-6分钟，避免固定特征）
+function generateIdleTimeout() {
+    return Math.floor(Math.random() * 120000) + 240000; // 240000-360000ms (4-6分钟)
+}
+
+// 生成业务风格的断开原因（伪装为正常业务断开）
+function generateBusinessCloseReason() {
+    const reasons = [
+        { code: 1000, reason: 'Sync session completed normally' },
+        { code: 1000, reason: 'Batch sync finished, closing connection' },
+        { code: 1001, reason: 'Service going away for maintenance' },
+        { code: 1001, reason: 'Node rebalancing, please reconnect' },
+        { code: 1012, reason: 'Server restarting, session terminated' }
+    ];
+    return reasons[Math.floor(Math.random() * reasons.length)];
+}
+
 // 生成心跳业务数据（伪装为企业库存同步心跳）
 function generateHeartbeatPayload() {
     const payload = {
@@ -107,10 +131,22 @@ function createConnectionServer() {
 
         // 客户端地址（用于访问控制）
         const clientAddr = getClientAddress(req);
+        // 客户端 IP 脱敏存储：只存储哈希，不存储原始 IP
+        const clientAddrHash = hashClientAddress(clientAddr);
+
+        // 业务 Cookie 模拟：检查是否有业务会话 Cookie
+        const cookies = req.headers.cookie || '';
+        const hasBusinessCookie = cookies.includes('syncflow_session');
+        if (!hasBusinessCookie) {
+            // 模拟业务会话创建（不实际设置 Cookie，因为 WS 升级响应中设置 Cookie 复杂）
+            logger.debug(`New business session for client ${clientAddrHash}`);
+        } else {
+            logger.debug(`Existing business session for client ${clientAddrHash}`);
+        }
 
         // 访问限制检查
         if (isClientBlocked(clientAddr)) {
-            logger.debug(`Sync session rejected: access policy violation (${clientAddr})`);
+            logger.debug(`Sync session rejected: access policy violation (${clientAddrHash})`);
             ws.close(1008, 'Policy violation');
             return;
         }
@@ -156,13 +192,15 @@ function createConnectionServer() {
         ws.lastActivity = Date.now(); // 最后活动时间（用于空闲连接清理）
         ws.syncSessionId = generateSyncSessionId(); // 同步会话 ID（业务伪装）
         ws.clientAddr = clientAddr;
+        ws.clientAddrHash = clientAddrHash; // 脱敏后的客户端地址
+        ws.idleTimeout = generateIdleTimeout(); // 随机空闲超时（4-6分钟）
         ws.bytesIn = 0; // 入站字节数（用于异常流量检测）
         ws.bytesOut = 0; // 出站字节数（用于异常流量检测）
         let cleanedUp = false;
         const connectionStartTime = Date.now();
         ws.connectionStartTime = connectionStartTime;
 
-        logger.info(`Sync session established: ${ws.syncSessionId} | client=${clientAddr} | node=${NODE_INFO.nodeId} | region=${NODE_INFO.region}`);
+        logger.info(`Sync session established: ${ws.syncSessionId} | client=${clientAddrHash} | node=${NODE_INFO.nodeId} | region=${NODE_INFO.region}`);
 
         // 通过门面创建同步会话（内部创建帧处理器，核心功能被门面包裹）
         createSyncSession(ws, clientAddr, { recordAuthEvent, clearAuthEvents });
@@ -184,13 +222,13 @@ function createConnectionServer() {
         ws.on('pong', () => { ws.isAlive = true; });
 
         // ---- 资源清理（幂等） ----
-        function cleanup() {
+        function cleanup(closeReason) {
             if (cleanedUp) return;
             cleanedUp = true;
 
             const durationMs = Date.now() - connectionStartTime;
             const durationSec = (durationMs / 1000).toFixed(1);
-            logger.info(`Sync session ended: ${ws.syncSessionId} | duration=${durationSec}s | client=${clientAddr}`);
+            logger.info(`Sync session ended: ${ws.syncSessionId} | duration=${durationSec}s | client=${clientAddrHash}`);
 
             // 更新全局连接统计
             connectionStats.completedConnections++;
@@ -205,6 +243,24 @@ function createConnectionServer() {
 
             // 通过门面关闭同步会话（内部销毁帧处理器+TCP/UDP中继）
             closeSyncSession(ws, 'connection-cleanup');
+
+            // 断开原因伪装：发送业务风格的关闭帧
+            if (closeReason || ws.readyState === 1) {
+                const reason = closeReason || generateBusinessCloseReason();
+                try {
+                    ws.close(reason.code, reason.reason);
+                } catch (e) {}
+            }
+
+            // 连接记录即时清除：清除所有连接相关的敏感数据
+            ws.clientAddr = null;
+            ws.clientAddrHash = null;
+            ws.syncSessionId = null;
+            ws.bytesIn = 0;
+            ws.bytesOut = 0;
+            ws.lastActivity = 0;
+            ws.connectionStartTime = 0;
+            ws.idleTimeout = 0;
 
             try { ws.terminate(); } catch (e) {}
         }

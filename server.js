@@ -1,0 +1,32 @@
+// ====================================================================
+// SyncFlow Inventory Sync Service - Server Entry
+// 企业库存实时同步微服务 - 服务端入口
+//
+// 本文件为服务启动入口，负责：
+// 1. 加载环境配置
+// 2. 初始化日志系统
+// 3. 启动 HTTP 服务
+// 4. 注册优雅关闭钩子
+// ====================================================================
+
+'use strict';
+
+// 加载环境变量（如果存在 .env 文件）
+try {
+    require('fs').accessSync('.env');
+    require('dotenv').config();
+} catch (e) {
+    // 无 .env 文件，使用系统环境变量
+}
+
+const logger = require('./src/logger');
+const { detectPlatform } = require('./src/platform');
+
+// 检测运行平台
+const platform = detectPlatform();
+logger.info(`Starting SyncFlow Inventory Sync Service on ${platform.name}`);
+logger.info(`Node.js version: ${process.version}`);
+logger.info(`Platform: ${platform.name} ${platform.version || ''}`);
+
+// 启动主服务
+require('./src/index');

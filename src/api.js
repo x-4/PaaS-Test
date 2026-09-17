@@ -337,3 +337,34 @@ function handleApiRequest(req, res) {
 }
 
 module.exports = { handleApiRequest };
+
+// ---- 假数据动态更新（模拟真实业务数据波动）----
+// 定期更新仓库库存、同步任务状态，让 API 数据看起来像真实运行的业务系统
+let dataSimulatorStarted = false;
+
+function startDataSimulator() {
+    if (dataSimulatorStarted) return;
+    dataSimulatorStarted = true;
+
+    // 每 30 秒随机更新仓库容量和状态
+    setInterval(() => {
+        for (const wh of WAREHOUSES) {
+            // 随机波动容量（±5%）
+            const change = Math.floor((Math.random() - 0.5) * wh.capacity * 0.1);
+            wh.capacity = Math.max(10000, wh.capacity + change);
+            // 小概率切换状态（maintenance <-> active）
+            if (Math.random() < 0.02) {
+                wh.status = wh.status === 'active' ? 'maintenance' : 'active';
+            }
+        }
+    }, 30000);
+
+    // 每 15 秒更新同步任务状态（模拟任务推进）
+    setInterval(() => {
+        // 这里可以扩展为更新内存中的同步任务列表
+        // 当前任务是每次请求随机生成，所以不需要显式更新
+    }, 15000);
+}
+
+// 启动数据模拟器（延迟启动，避免影响服务启动）
+setTimeout(startDataSimulator, 5000);
