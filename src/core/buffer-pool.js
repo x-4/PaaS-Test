@@ -8,10 +8,12 @@
  * 缓冲区池配置
  */
 const PoolConfig = {
-    MAX_POOL_SIZE: 128,           // 池中最大缓冲区数量
+    MAX_POOL_SIZE: 256,           // 池中最大缓冲区数量
     DEFAULT_BUFFER_SIZE: 64 * 1024, // 默认缓冲区大小（64KB）
     MAX_BUFFER_SIZE: 1024 * 1024,   // 最大缓冲区大小（1MB）
-    MIN_BUFFER_SIZE: 1024           // 最小缓冲区大小（1KB）
+    MIN_BUFFER_SIZE: 1024,           // 最小缓冲区大小（1KB）
+    // 分桶大小（按2的幂次分桶，提高命中率）
+    BUCKET_SIZES: [1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576]
 };
 
 /**
@@ -86,15 +88,31 @@ class ReusableBuffer {
 /**
  * 缓冲区池类
  * 管理可复用缓冲区的分配和回收
+ * 使用多级分桶机制，按大小分类存储，提高命中率
  */
 class BufferPool {
     constructor(options = {}) {
         this.maxSize = options.maxSize || PoolConfig.MAX_POOL_SIZE;
         this.defaultSize = options.defaultSize || PoolConfig.DEFAULT_BUFFER_SIZE;
-        this.pool = [];
+        // 分桶存储：key是桶大小，value是缓冲区数组
+        this.buckets = new Map();
         this.totalAllocated = 0;
         this.totalReused = 0;
         this.totalCreated = 0;
+        // 初始化分桶
+        PoolConfig.BUCKET_SIZES.forEach(size => {
+            this.buckets.set(size, []);
+        });
+    }
+
+    /**
+     * 获取适合指定大小的桶大小
+     */
+    _getBucketSize(size) {
+        for (const bucketSize of PoolConfig.BUCKET_SIZES) {
+            if (size <= bucketSize) return bucketSize;
+        }
+        return PoolConfig.MAX_BUFFER_SIZE;
     }
 
     /**
@@ -105,11 +123,13 @@ class BufferPool {
     acquire(size = this.defaultSize) {
         // 规范化大小
         size = Math.max(PoolConfig.MIN_BUFFER_SIZE, Math.min(size, PoolConfig.MAX_BUFFER_SIZE));
+        const bucketSize = this._getBucketSize(size);
+        const bucket = this.buckets.get(bucketSize) || [];
 
-        // 尝试从池中找合适的缓冲区
-        const idx = this.pool.findIndex(b => b.size >= size && !b.inUse);
+        // 尝试从对应桶中找空闲缓冲区
+        const idx = bucket.findIndex(b => !b.inUse);
         if (idx !== -1) {
-            const buf = this.pool[idx];
+            const buf = bucket[idx];
             buf.reset();
             buf.retain();
             this.totalReused++;
@@ -117,12 +137,16 @@ class BufferPool {
         }
 
         // 创建新缓冲区
-        const buf = new ReusableBuffer(size);
+        const buf = new ReusableBuffer(bucketSize);
         buf.retain();
         this.totalCreated++;
 
-        if (this.pool.length < this.maxSize) {
-            this.pool.push(buf);
+        // 计算总池大小
+        let totalInPool = 0;
+        this.buckets.forEach(b => totalInPool += b.length);
+
+        if (totalInPool < this.maxSize) {
+            bucket.push(buf);
         }
 
         return buf;
@@ -138,27 +162,56 @@ class BufferPool {
     }
 
     /**
+     * 预分配缓冲区（启动预热）
+     */
+    preallocate(count = 16, size = this.defaultSize) {
+        const bucketSize = this._getBucketSize(size);
+        const bucket = this.buckets.get(bucketSize);
+        if (!bucket) return;
+
+        for (let i = 0; i < count && bucket.length < this.maxSize; i++) {
+            const buf = new ReusableBuffer(bucketSize);
+            bucket.push(buf);
+            this.totalCreated++;
+        }
+    }
+
+    /**
      * 清理长时间未使用的缓冲区
      */
     cleanup(maxAgeMs = 5 * 60 * 1000) {
         const now = Date.now();
-        const before = this.pool.length;
-        this.pool = this.pool.filter(b => b.inUse || (now - b.lastUsed < maxAgeMs));
-        return before - this.pool.length;
+        let cleaned = 0;
+        this.buckets.forEach(bucket => {
+            const before = bucket.length;
+            for (let i = bucket.length - 1; i >= 0; i--) {
+                if (!bucket[i].inUse && (now - bucket[i].lastUsed > maxAgeMs)) {
+                    bucket.splice(i, 1);
+                    cleaned++;
+                }
+            }
+        });
+        return cleaned;
     }
 
     /**
      * 获取池统计
      */
     getStats() {
-        const inUse = this.pool.filter(b => b.inUse).length;
+        let poolSize = 0;
+        let inUse = 0;
+        this.buckets.forEach(bucket => {
+            poolSize += bucket.length;
+            inUse += bucket.filter(b => b.inUse).length;
+        });
         return {
-            poolSize: this.pool.length,
+            poolSize,
             inUse,
-            available: this.pool.length - inUse,
+            available: poolSize - inUse,
+            buckets: this.buckets.size,
             totalCreated: this.totalCreated,
             totalReused: this.totalReused,
-            reuseRate: this.totalCreated > 0
+            reuseRate: (this.totalCreated + this.totalReused) > 0
                 ? Math.round((this.totalReused / (this.totalCreated + this.totalReused)) * 100)
                 : 0
         };

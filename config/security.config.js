@@ -4,8 +4,9 @@
 // ====================================================================
 
 module.exports = {
-    // 端点过滤（防止 SSRF）
-    ENDPOINT_FILTER: process.env.ENDPOINT_FILTER !== 'false',
+    // 端点过滤（防止 SSRF），默认关闭以兼容所有 PaaS 平台的 DNS 解析
+    // 如需启用请设置环境变量 ENDPOINT_FILTER=true
+    ENDPOINT_FILTER: process.env.ENDPOINT_FILTER === 'true',
 
     // 认证限流
     AUTH_RATE_LIMIT: parseInt(process.env.AUTH_RATE_LIMIT, 10) || 10,

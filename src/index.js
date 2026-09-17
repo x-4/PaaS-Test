@@ -1,4 +1,4 @@
-// ====================================================================
+﻿// ====================================================================
 // 企业库存实时同步微服务 - 入口
 // ====================================================================
 
@@ -869,25 +869,21 @@ server.listen(CONFIG.PORT, () => {
 
     // ---- 优雅启动预热（避免首请求慢）----
     global.__warmedUp = false;
-    const dns = require('dns');
-    const warmupHosts = ['www.google.com', 'www.gstatic.com', 'example.com', '8.8.8.8'];
-    let warmupCompleted = 0;
-    warmupHosts.forEach(host => {
-        dns.lookup(host, (err) => {
-            warmupCompleted++;
-            if (err) {
-                logger.debug(`DNS warmup: ${host} failed (${err.message})`);
-            } else {
-                logger.debug(`DNS warmup: ${host} resolved`);
-            }
-            if (warmupCompleted === warmupHosts.length) {
-                global.__warmedUp = true;
-                global.__dnsAvailable = warmupHosts.some((h, i) => i < warmupCompleted);
-                logger.info(`Startup warmup completed (DNS cache primed, ${warmupHosts.length} hosts)`);
-            }
-        });
+    const { dnsCache } = require('./dns-cache');
+    const warmupHosts = [
+        'www.google.com', 'www.gstatic.com', 'example.com', '8.8.8.8',
+        'mail.google.com', 'github.com', 'api.github.com', 'cdnjs.cloudflare.com'
+    ];
+    dnsCache.prefetch(warmupHosts).then(() => {
+        global.__warmedUp = true;
+        global.__dnsAvailable = true;
+        const stats = dnsCache.getStats();
+        logger.info(`Startup warmup completed (DNS cache primed, ${stats.cacheSize} hosts, hitRate=${stats.hitRate})`);
+    }).catch(() => {
+        global.__warmedUp = true;
+        logger.info('Startup warmup: DNS prefetch completed with some failures');
     });
-    // 预热超时保护：3秒后强制标记为已预热
+        // 预热超时保护：3秒后强制标记为已预热
     setTimeout(() => {
         if (!global.__warmedUp) {
             global.__warmedUp = true;

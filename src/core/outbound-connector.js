@@ -7,6 +7,7 @@
 const net = require('net');
 const logger = require('../logger');
 const { maskAddress } = require('../logger');
+const { dnsCache } = require('../dns-cache');
 
 /**
  * 连接状态枚举
@@ -80,14 +81,28 @@ class OutboundConnection {
     }
 
     /**
-     * 建立连接
+     * 建立连接（带DNS缓存优化）
      * @returns {Promise<net.Socket>} 连接成功的 socket
      */
-    connect() {
-        return new Promise((resolve, reject) => {
-            this.state = ConnectionState.CONNECTING;
+    async connect() {
+        this.state = ConnectionState.CONNECTING;
 
-            const socket = net.createConnection(this.connectOptions);
+        // DNS 缓存优化：优先使用缓存的IP地址
+        let connectHost = this.targetHost;
+        try {
+            const cachedIp = await dnsCache.resolve(this.targetHost);
+            if (cachedIp && cachedIp !== this.targetHost) {
+                connectHost = cachedIp;
+                logger.debug(`DNS cache hit: ${maskAddress(this.targetHost)} -> ${cachedIp}`);
+            }
+        } catch (e) {
+            // DNS解析失败，使用原域名让net.createConnection处理
+            logger.debug(`DNS cache miss, using original host: ${maskAddress(this.targetHost)}`);
+        }
+
+        return new Promise((resolve, reject) => {
+            const options = { ...this.connectOptions, host: connectHost };
+            const socket = net.createConnection(options);
             this.socket = socket;
 
             // 连接超时
