@@ -237,6 +237,14 @@ function createConnectionServer() {
                 connectionStats.maxDurationMs = durationMs;
             }
 
+            // 记录连接时长分布（流量特征伪装）
+            try {
+                const { trafficStats } = require('./core/metrics-collector');
+                if (trafficStats && typeof trafficStats.recordConnectionDuration === 'function') {
+                    trafficStats.recordConnectionDuration(durationMs);
+                }
+            } catch (e) {}
+
             clearInterval(heartbeatTimer);
             activeConnections.delete(ws);
             decrementConnection(clientAddr);

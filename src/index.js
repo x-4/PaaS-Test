@@ -294,7 +294,23 @@ function handleHealthCheck(req, res) {
 }
 
 // ---- HTTP 服务 ----
+// HTTP 请求方法分布统计（流量特征伪装）
+const httpMethodStats = {
+    GET: 0,
+    POST: 0,
+    PUT: 0,
+    DELETE: 0,
+    HEAD: 0,
+    OPTIONS: 0,
+    PATCH: 0
+};
+
 const server = http.createServer((req, res) => {
+    // 记录请求方法分布（流量特征伪装）
+    if (httpMethodStats.hasOwnProperty(req.method)) {
+        httpMethodStats[req.method]++;
+    }
+
     // ---- HTTP 方法白名单：只允许常用方法，拒绝危险方法（TRACE/CONNECT等）----
     const ALLOWED_METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS'];
     if (!ALLOWED_METHODS.includes(req.method)) {

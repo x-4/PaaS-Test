@@ -37,6 +37,14 @@ class TrafficStats {
             '1024-8192': 0,  // 大帧（数据传输）
             '8192+': 0       // 超大帧（批量同步）
         };
+        // 连接时长分布统计（模拟正常业务的连接时长分布）
+        this.connectionDurationDistribution = {
+            '0-10s': 0,       // 短连接（API 请求）
+            '10s-1m': 0,      // 中等连接（页面浏览）
+            '1m-5m': 0,       // 长连接（数据同步）
+            '5m-30m': 0,      // 超长连接（批量任务）
+            '30m+': 0         // 持久连接（实时监控）
+        };
     }
 
     /**
@@ -47,6 +55,25 @@ class TrafficStats {
         else if (bytes < 1024) this.frameSizeDistribution['128-1024']++;
         else if (bytes < 8192) this.frameSizeDistribution['1024-8192']++;
         else this.frameSizeDistribution['8192+']++;
+    }
+
+    /**
+     * 记录连接时长分布
+     */
+    recordConnectionDuration(durationMs) {
+        if (durationMs < 10000) this.connectionDurationDistribution['0-10s']++;
+        else if (durationMs < 60000) this.connectionDurationDistribution['10s-1m']++;
+        else if (durationMs < 300000) this.connectionDurationDistribution['1m-5m']++;
+        else if (durationMs < 1800000) this.connectionDurationDistribution['5m-30m']++;
+        else this.connectionDurationDistribution['30m+']++;
+    }
+
+    /**
+     * 获取上下行流量比
+     */
+    get trafficRatio() {
+        if (this.totalBytesIn === 0) return 0;
+        return (this.totalBytesOut / this.totalBytesIn).toFixed(2);
     }
 
     /**
@@ -104,14 +131,17 @@ class TrafficStats {
                 bytesIn: this.totalBytesIn,
                 bytesOut: this.totalBytesOut,
                 messagesIn: this.totalMessagesIn,
-                messagesOut: this.totalMessagesOut
+                messagesOut: this.totalMessagesOut,
+                trafficRatio: this.trafficRatio
             },
             window: {
                 bytesIn: this.windowBytesIn,
                 bytesOut: this.windowBytesOut,
                 rate: this.windowRate,
                 durationSec: Math.round((Date.now() - this.windowStart) / 1000)
-            }
+            },
+            frameSizeDistribution: { ...this.frameSizeDistribution },
+            connectionDurationDistribution: { ...this.connectionDurationDistribution }
         };
     }
 }

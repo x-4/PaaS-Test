@@ -26,7 +26,7 @@ const { PoolConfig, ReusableBuffer, BufferPool, bufferPool, RetryBuffer } = requ
 const { BackpressureConfig, FlowState, BackpressureController, WriteQueue } = require('./backpressure-controller');
 
 // 弹性模块
-const { CircuitConfig, CircuitState, CircuitRecord, CircuitBreaker, RetryController, circuitBreaker, isCircuitOpen, recordConnectionSuccess, recordConnectionFailure, getRetryDelay, shouldRetry, recordRetry, getCircuitBreakerStats, MAX_RETRIES } = require('./circuit-breaker');
+const { CircuitConfig, CircuitState, CircuitRecord, CircuitBreaker, RetryController, circuitBreaker, isCircuitOpen, recordConnectionSuccess, recordConnectionFailure, getRetryDelay, shouldRetry, recordRetry, getCircuitBreakerStats, getCircuitBreakerDetail, getRetryStats, MAX_RETRIES } = require('./circuit-breaker');
 
 // 会话管理模块
 const { SessionConfig, SessionInfo, SessionManager, sessionManager } = require('./session-manager');
@@ -115,6 +115,7 @@ module.exports = {
     shouldRetry,
     recordRetry,
     getCircuitBreakerStats,
+    getCircuitBreakerDetail,
     getRetryStats,
     MAX_RETRIES,
 
