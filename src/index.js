@@ -397,7 +397,7 @@ const server = http.createServer((req, res) => {
     // TLS / HSTS（模拟启用 HTTPS 的生产环境，由 PaaS 反向代理终止 TLS）
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
     // Content-Security-Policy（现代企业应用标准）
-    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: https:; font-src 'self' https://cdn.jsdelivr.net; connect-src 'self' wss: ws:; frame-ancestors 'self'");
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' wss: ws:; frame-ancestors 'self'");
     // HTTP/2 兼容提示（由 PaaS 平台升级，Node.js 服务声明支持）
     res.setHeader('Alt-Svc', 'h2=":443"; ma=86400, h3=":443"; ma=86400');
     res.setHeader('Accept-CH', 'Viewport-Width, Width, DPR, Device-Memory, RTT, Downlink, ECT');

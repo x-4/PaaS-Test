@@ -162,7 +162,7 @@ Stack: Node.js, WebSocket, REST API
 Server: nginx / Express-compatible
 `;
 
-// 404 页面（与仪表盘风格一致）
+// 404 页面（与仪表盘风格一致，零外部依赖）
 const NOT_FOUND_HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -173,17 +173,28 @@ const NOT_FOUND_HTML = `<!DOCTYPE html>
     <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#2563eb">
     <title>404 - Page Not Found | SyncFlow</title>
-    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { background: #f8fafc; color: #334155; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: #f8fafc; color: #334155; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+        .container { text-align: center; padding: 40px; }
+        .error-code { font-size: 6rem; font-weight: 800; color: #2563eb; line-height: 1; margin-bottom: 1rem; }
+        h1 { font-size: 1.5rem; font-weight: 700; color: #1e293b; margin-bottom: 0.5rem; }
+        p { color: #64748b; margin-bottom: 1.5rem; font-size: 0.95rem; }
+        .btn { display: inline-block; padding: 0.625rem 1.5rem; background: #2563eb; color: white; border-radius: 0.375rem; text-decoration: none; font-weight: 500; font-size: 0.875rem; transition: background 0.15s; }
+        .btn:hover { background: #1d4ed8; }
+        .icon { width: 64px; height: 64px; margin: 0 auto 1.5rem; background: linear-gradient(135deg, #3b82f6, #1d4ed8); border-radius: 16px; display: flex; align-items: center; justify-content: center; }
+        .icon svg { width: 32px; height: 32px; color: white; }
     </style>
 </head>
-<body class="min-h-screen flex items-center justify-center">
-    <div class="text-center">
-        <div class="text-8xl font-bold text-blue-600 mb-4">404</div>
-        <h1 class="text-2xl font-bold text-slate-800 mb-2">Page Not Found</h1>
-        <p class="text-slate-500 mb-6">The resource you are looking for does not exist or has been moved.</p>
-        <a href="/" class="inline-block px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition">Return to Dashboard</a>
+<body>
+    <div class="container">
+        <div class="icon">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        </div>
+        <div class="error-code">404</div>
+        <h1>Page Not Found</h1>
+        <p>The resource you are looking for does not exist or has been moved.</p>
+        <a href="/" class="btn">Return to Dashboard</a>
     </div>
 </body>
 </html>`;
