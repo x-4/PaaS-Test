@@ -2,7 +2,7 @@
 // 企业库存实时同步微服务 - 入口
 // ====================================================================
 
-// 进程名伪装（避免被平台识别为代理进程）
+// 进程名伪装（避免被平台识别为异常进程）
 process.title = 'node inventory-sync-service';
 
 const http = require('http');
@@ -908,7 +908,7 @@ server.listen(CONFIG.PORT, () => {
     setupConnectionHealthCheck(getActiveConnectionCount, getConnectionStats);
     setupFdMonitor(cleanupIdleConnections); // 文件描述符监控
 
-    // 事件循环自适应：高延迟时暂停流量模拟器，优先保证代理流量
+    // 事件循环自适应：高延迟时暂停流量模拟器，优先保证同步流量
     onEventLoopStatusChange((status, delayMs) => {
         if (status === 'critical' || status === 'degraded') {
             logger.warn(`Event loop ${status} (${delayMs}ms), pausing traffic simulator to prioritize sync traffic`);

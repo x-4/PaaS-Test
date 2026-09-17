@@ -337,7 +337,7 @@ async function executeUserSession(port, session) {
 
 // ---- 业务事件流连接模拟 ----
 // 定期建立到 /api/v1/events 的 WebSocket 连接，接收业务推送，保持一段时间后断开
-// 用于业务伪装：让 WS 流量不只是二进制代理数据，还有 JSON 业务事件流
+// 用于业务伪装：让 WS 流量不只是二进制同步数据，还有 JSON 业务事件流
 const EVENT_STREAM_UAS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',

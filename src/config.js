@@ -3,7 +3,7 @@
 // 从 config/ 目录加载分散的配置文件，合并为统一配置对象
 // ====================================================================
 
-const { CONFIG: baseConfig, validateConfig: baseValidate } = require('./config/index');
+const { CONFIG: baseConfig, validateConfig: baseValidate } = require('../config');
 
 // 补充业务特定配置（不在通用配置文件中的项）
 const CONFIG = {

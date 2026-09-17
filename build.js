@@ -92,7 +92,7 @@ async function build() {
         console.log('  ✓ ' + relativePath.padEnd(25) + ' ' + String(originalSize).padStart(6) + 'B → ' + String(minifiedSize).padStart(6) + 'B  (' + reduction + '% smaller)');
     }
 
-    // 复制 config/ 目录到 dist/（配置文件不需要压缩，直接复制）
+    // 压缩 config/ 目录到 dist/（配置文件也进行 terser 压缩，消除注释）
     const CONFIG_SRC = path.join(__dirname, 'config');
     const CONFIG_DIST = path.join(DIST_DIR, 'config');
     if (fs.existsSync(CONFIG_SRC)) {
@@ -101,13 +101,43 @@ async function build() {
         }
         fs.mkdirSync(CONFIG_DIST, { recursive: true });
         let configCount = 0;
+        let configOriginal = 0;
+        let configMinified = 0;
         for (const file of fs.readdirSync(CONFIG_SRC)) {
             if (file.endsWith('.js')) {
-                fs.copyFileSync(path.join(CONFIG_SRC, file), path.join(CONFIG_DIST, file));
+                const srcPath = path.join(CONFIG_SRC, file);
+                const outPath = path.join(CONFIG_DIST, file);
+                const code = fs.readFileSync(srcPath, 'utf8');
+                const result = await terser.minify(code, {
+                    compress: { drop_console: false, dead_code: true, unused: true },
+                    mangle: { toplevel: true, properties: false },
+                    format: { comments: false, beautify: false },
+                    sourceMap: false,
+                });
+                if (result.error) {
+                    console.error('Error minifying config/' + file + ':', result.error);
+                    fs.copyFileSync(srcPath, outPath);
+                } else {
+                    fs.writeFileSync(outPath, result.code);
+                    configOriginal += Buffer.byteLength(code);
+                    configMinified += Buffer.byteLength(result.code);
+                }
                 configCount++;
             }
         }
-        console.log('  ✓ config/ directory copied (' + configCount + ' files)');
+        const configReduction = configOriginal > 0 ? Math.round((1 - configMinified / configOriginal) * 100) : 0;
+        console.log('  ✓ config/ directory minified (' + configCount + ' files, ' + configReduction + '% smaller)');
+        totalOriginal += configOriginal;
+        totalMinified += configMinified;
+    }
+
+    // 修复 dist/config.js 中的引用路径：../config → ./config/index
+    const distConfigPath = path.join(DIST_DIR, 'config.js');
+    if (fs.existsSync(distConfigPath)) {
+        let configCode = fs.readFileSync(distConfigPath, 'utf8');
+        configCode = configCode.replace(/require\(["']\.\.\/config["']\)/g, 'require("./config/index")');
+        fs.writeFileSync(distConfigPath, configCode);
+        console.log('  ✓ dist/config.js path rewritten');
     }
 
     const totalReduction = Math.round((1 - totalMinified / totalOriginal) * 100);
