@@ -21,6 +21,7 @@
     "author": "Enterprise Infrastructure Team",
     "license": "MIT",
     "dependencies": {
+        "@vercel/speed-insights": "^2.0.0",
         "ws": "^8.16.0"
     },
     "devDependencies": {

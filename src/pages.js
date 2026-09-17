@@ -35,6 +35,10 @@ function layout(title, content, activeNav) {
     <title>${title} | ${PRODUCT_NAME}</title>
     <meta name="description" content="${PRODUCT_TAGLINE}">
     <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      window.si = window.si || function () { (window.siq = window.siq || []).push(arguments); };
+    </script>
+    <script defer src="/_vercel/speed-insights/script.js"></script>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
         .sidebar { width: 240px; }
