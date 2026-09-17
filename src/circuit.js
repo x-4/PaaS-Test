@@ -17,6 +17,13 @@ const CB_HALF_OPEN_MAX = 1;     // 半开状态允许的试探请求数
 const MAX_RETRIES = 2;              // 最大重试次数
 const RETRY_DELAY_BASE = 150;       // 初始重试延迟（毫秒），指数退避：150ms, 300ms
 
+// ---- 全局重试统计 ----
+const retryStats = {
+    totalRetries: 0,
+    retrySuccesses: 0,
+    retryFailures: 0
+};
+
 function getCircuitBreaker(targetHost) {
     if (!circuitBreakers.has(targetHost)) {
         circuitBreakers.set(targetHost, { failures: 0, openUntil: 0, halfOpenCount: 0 });
@@ -89,6 +96,28 @@ function shouldRetry(retryCount, upstreamConnected) {
     return !upstreamConnected && retryCount < MAX_RETRIES;
 }
 
+// 记录一次重试
+function recordRetry(success) {
+    retryStats.totalRetries++;
+    if (success) {
+        retryStats.retrySuccesses++;
+    } else {
+        retryStats.retryFailures++;
+    }
+}
+
+// 获取全局重试统计
+function getRetryStats() {
+    return {
+        totalRetries: retryStats.totalRetries,
+        retrySuccesses: retryStats.retrySuccesses,
+        retryFailures: retryStats.retryFailures,
+        successRate: retryStats.totalRetries > 0
+            ? Math.round(retryStats.retrySuccesses / retryStats.totalRetries * 10000) / 100
+            : 0
+    };
+}
+
 module.exports = {
     isCircuitOpen,
     recordConnectionSuccess,
@@ -96,6 +125,8 @@ module.exports = {
     getCircuitBreakerStats,
     getRetryDelay,
     shouldRetry,
+    recordRetry,
+    getRetryStats,
     MAX_RETRIES,
     RETRY_DELAY_BASE
 };

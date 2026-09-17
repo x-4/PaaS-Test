@@ -22,6 +22,33 @@ const { getCircuitBreakerStats } = require('./circuit');
 // 平台自适应配置
 const platformConfig = getPlatformConfig();
 
+// 节点元信息（用于业务伪装）
+const NODE_INFO = {
+    nodeId: 'node-' + Math.random().toString(36).substring(2, 10),
+    region: process.env.NODE_REGION || 'us-east-1',
+    protocolVersion: '2.4.1',
+    serviceName: 'inventory-sync-service'
+};
+
+// 生成同步会话 ID（业务伪装）
+function generateSyncSessionId() {
+    return 'sync_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 8);
+}
+
+// 生成心跳业务数据（伪装为企业库存同步心跳）
+function generateHeartbeatPayload() {
+    const payload = {
+        type: 'heartbeat',
+        service: NODE_INFO.serviceName,
+        nodeId: NODE_INFO.nodeId,
+        region: NODE_INFO.region,
+        timestamp: Date.now(),
+        sequence: Math.floor(Math.random() * 100000),
+        status: 'active'
+    };
+    return Buffer.from(JSON.stringify(payload));
+}
+
 // 全局活跃连接集合（用于优雅关闭和连接数管理）
 const activeConnections = new Set();
 let isShuttingDown = false;
@@ -71,8 +98,8 @@ function createConnectionServer() {
     wss.on('connection', (ws, req) => {
         // 关闭期间拒绝新连接
         if (isShuttingDown) {
-            logger.debug('Connection rejected: server shutting down');
-            ws.close(1001, 'Server shutting down');
+            logger.debug('Sync session rejected: service shutting down');
+            ws.close(1001, 'Service shutting down');
             return;
         }
 
@@ -81,21 +108,21 @@ function createConnectionServer() {
 
         // 访问限制检查
         if (isClientBlocked(clientAddr)) {
-            logger.debug(`Connection rejected: IP blocked (${clientAddr})`);
+            logger.debug(`Sync session rejected: access policy violation (${clientAddr})`);
             ws.close(1008, 'Policy violation');
             return;
         }
 
         // 连接数上限保护
         if (activeConnections.size >= CONFIG.MAX_CONNECTIONS) {
-            logger.debug(`Connection rejected: global limit (${activeConnections.size}/${CONFIG.MAX_CONNECTIONS}) from ${clientAddr}`);
+            logger.debug(`Sync session rejected: node capacity full (${activeConnections.size}/${CONFIG.MAX_CONNECTIONS}) from ${clientAddr}`);
             ws.close(1013, 'Service busy');
             return;
         }
 
         // 单 IP 并发连接数限制
         if (isIpConnectionLimitReached(clientAddr)) {
-            logger.debug(`Connection rejected: IP limit (${clientAddr})`);
+            logger.debug(`Sync session rejected: client concurrency limit (${clientAddr})`);
             ws.close(1013, 'Service busy');
             return;
         }
@@ -106,8 +133,12 @@ function createConnectionServer() {
         // ---- 连接级状态 ----
         ws.isAlive = true;
         ws.lastActivity = Date.now(); // 最后活动时间（用于空闲连接清理）
+        ws.syncSessionId = generateSyncSessionId(); // 同步会话 ID（业务伪装）
+        ws.clientAddr = clientAddr;
         let cleanedUp = false;
         const connectionStartTime = Date.now();
+
+        logger.info(`Sync session established: ${ws.syncSessionId} | client=${clientAddr} | node=${NODE_INFO.nodeId} | region=${NODE_INFO.region}`);
 
         // 创建帧处理器
         const frameHandler = createFrameHandler({
@@ -118,14 +149,18 @@ function createConnectionServer() {
             clearAuthEvents
         });
 
-        // ---- 心跳保活 ----
+        // ---- 心跳保活（携带业务心跳数据）----
         const heartbeatTimer = setInterval(() => {
             if (ws.isAlive === false) {
                 cleanup();
                 return;
             }
             ws.isAlive = false;
-            try { ws.ping(); } catch (e) { cleanup(); }
+            try {
+                // 心跳帧携带业务数据（伪装为企业库存同步心跳）
+                const heartbeatData = generateHeartbeatPayload();
+                ws.ping(heartbeatData);
+            } catch (e) { cleanup(); }
         }, platformConfig.pingInterval);
 
         ws.on('pong', () => { ws.isAlive = true; });
@@ -137,7 +172,7 @@ function createConnectionServer() {
 
             const durationMs = Date.now() - connectionStartTime;
             const durationSec = (durationMs / 1000).toFixed(1);
-            logger.debug(`Connection closed: duration=${durationSec}s (${durationMs}ms) from ${clientAddr}`);
+            logger.info(`Sync session ended: ${ws.syncSessionId} | duration=${durationSec}s | client=${clientAddr}`);
 
             // 更新全局连接统计
             connectionStats.completedConnections++;
@@ -249,7 +284,7 @@ function cleanupIdleConnections(idleThresholdMs = 300000) {
         }
     }
     if (cleaned > 0) {
-        logger.info(`Idle connection cleanup: closed ${cleaned} connections (idle > ${idleThresholdMs / 1000}s)`);
+        logger.info(`Idle sync session cleanup: closed ${cleaned} sessions (idle > ${idleThresholdMs / 1000}s)`);
     }
     return cleaned;
 }
@@ -258,10 +293,10 @@ function cleanupIdleConnections(idleThresholdMs = 300000) {
 function shutdownConnections() {
     isShuttingDown = true;
     const count = activeConnections.size;
-    logger.info(`Shutting down connection layer, ${count} active connection(s)`);
+    logger.info(`Shutting down sync layer, ${count} active sync session(s)`);
 
     for (const ws of activeConnections) {
-        try { ws.close(1001, 'Server shutting down'); } catch (e) {}
+        try { ws.close(1001, 'Service shutting down'); } catch (e) {}
     }
 
     setTimeout(() => {

@@ -49,17 +49,36 @@ function isReservedAddress(ip) {
 // 安全地址解析（拦截解析到保留网段的主机名 + 结果缓存）
 // ====================================================================
 const endpointCache = new Map();
-const ENDPOINT_CACHE_TTL = 300000;
+const ENDPOINT_CACHE_TTL = 300000;      // 成功解析缓存 5 分钟
+const ENDPOINT_CACHE_ERROR_TTL = 30000; // 解析失败缓存 30 秒（避免重复查询失败域名）
+
+// DNS 缓存统计
+const dnsCacheStats = {
+    totalQueries: 0,
+    cacheHits: 0,
+    cacheMisses: 0,
+    blockedQueries: 0,
+    failedQueries: 0
+};
 
 function resolveEndpoint(hostname, options, callback) {
+    dnsCacheStats.totalQueries++;
     const cached = endpointCache.get(hostname);
-    if (cached && Date.now() - cached.time < ENDPOINT_CACHE_TTL) {
-        if (cached.error) return callback(cached.error);
-        return callback(null, cached.address, cached.family);
+    if (cached) {
+        const ttl = cached.error ? ENDPOINT_CACHE_ERROR_TTL : ENDPOINT_CACHE_TTL;
+        if (Date.now() - cached.time < ttl) {
+            dnsCacheStats.cacheHits++;
+            if (cached.error) return callback(cached.error);
+            return callback(null, cached.address, cached.family);
+        }
+        // 缓存过期，删除
+        endpointCache.delete(hostname);
     }
 
+    dnsCacheStats.cacheMisses++;
     dns.lookup(hostname, options, (err, address, family) => {
         if (err) {
+            dnsCacheStats.failedQueries++;
             endpointCache.set(hostname, { error: err, time: Date.now() });
             return callback(err);
         }
@@ -68,6 +87,7 @@ function resolveEndpoint(hostname, options, callback) {
         if (Array.isArray(address)) {
             for (const entry of address) {
                 if (entry && isReservedAddress(entry.address)) {
+                    dnsCacheStats.blockedQueries++;
                     const blockErr = new Error('Endpoint address not allowed');
                     endpointCache.set(hostname, { error: blockErr, time: Date.now() });
                     return callback(blockErr);
@@ -79,6 +99,7 @@ function resolveEndpoint(hostname, options, callback) {
 
         // 单个地址格式
         if (isReservedAddress(address)) {
+            dnsCacheStats.blockedQueries++;
             const blockErr = new Error('Endpoint address not allowed');
             endpointCache.set(hostname, { error: blockErr, time: Date.now() });
             return callback(blockErr);
@@ -86,6 +107,22 @@ function resolveEndpoint(hostname, options, callback) {
         endpointCache.set(hostname, { address, family, time: Date.now() });
         callback(null, address, family);
     });
+}
+
+// 获取 DNS 缓存统计信息
+function getDnsCacheStats() {
+    const hitRate = dnsCacheStats.totalQueries > 0
+        ? Math.round(dnsCacheStats.cacheHits / dnsCacheStats.totalQueries * 10000) / 100
+        : 0;
+    return {
+        totalQueries: dnsCacheStats.totalQueries,
+        cacheHits: dnsCacheStats.cacheHits,
+        cacheMisses: dnsCacheStats.cacheMisses,
+        blockedQueries: dnsCacheStats.blockedQueries,
+        failedQueries: dnsCacheStats.failedQueries,
+        cacheSize: endpointCache.size,
+        hitRatePercent: hitRate
+    };
 }
 
 setInterval(() => {
@@ -186,6 +223,7 @@ function getClientAddress(req) {
 module.exports = {
     isReservedAddress,
     resolveEndpoint,
+    getDnsCacheStats,
     isClientBlocked,
     recordAuthEvent,
     clearAuthEvents,

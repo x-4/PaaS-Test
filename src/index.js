@@ -3,6 +3,7 @@
 // ====================================================================
 
 const http = require('http');
+const zlib = require('zlib');
 const { CONFIG, validateConfig } = require('./config');
 const logger = require('./logger');
 const { handlePageRequest } = require('./pages');
@@ -23,6 +24,8 @@ const {
 const { detectPlatform, getPlatformConfig } = require('./platform');
 const { destroyTenantKey } = require('./auth');
 const { startTrafficSimulator, startScheduledJobSimulator } = require('./traffic-simulator');
+const { getDnsCacheStats } = require('./security');
+const { getRetryStats } = require('./circuit');
 
 // ---- 启动前配置校验 ----
 try {
@@ -144,22 +147,102 @@ function handleHealthCheck(req, res) {
     // Prometheus 指标格式
     if (METRICS_ENDPOINTS.includes(path)) {
         const mem = process.memoryUsage();
+        const connStats = getConnectionStats();
+        const dnsStats = getDnsCacheStats();
+        const retryStats = getRetryStats();
+        const cbStats = getCircuitBreakerStats();
+        const resilienceStats = getResilienceStats();
+        const openCircuits = cbStats.filter(c => c.state === 'open').length;
+        const halfOpenCircuits = cbStats.filter(c => c.state === 'half-open').length;
+
         const metrics = [
+            // ---- 服务状态 ----
             '# HELP inventory_sync_up Service is up',
             '# TYPE inventory_sync_up gauge',
             'inventory_sync_up 1',
-            '# HELP inventory_sync_active_connections Active WebSocket connections',
-            '# TYPE inventory_sync_active_connections gauge',
-            `inventory_sync_active_connections ${data.activeConnections}`,
             '# HELP inventory_sync_uptime_seconds Service uptime in seconds',
             '# TYPE inventory_sync_uptime_seconds gauge',
             `inventory_sync_uptime_seconds ${data.uptime}`,
+
+            // ---- 连接统计 ----
+            '# HELP inventory_sync_active_connections Active WebSocket connections',
+            '# TYPE inventory_sync_active_connections gauge',
+            `inventory_sync_active_connections ${data.activeConnections}`,
+            '# HELP inventory_sync_total_connections Total WebSocket connections',
+            '# TYPE inventory_sync_total_connections counter',
+            `inventory_sync_total_connections ${connStats.totalConnections}`,
+            '# HELP inventory_sync_completed_connections Completed WebSocket connections',
+            '# TYPE inventory_sync_completed_connections counter',
+            `inventory_sync_completed_connections ${connStats.completedConnections}`,
+            '# HELP inventory_sync_avg_connection_duration_ms Average connection duration in milliseconds',
+            '# TYPE inventory_sync_avg_connection_duration_ms gauge',
+            `inventory_sync_avg_connection_duration_ms ${connStats.avgDurationMs}`,
+
+            // ---- 内存统计 ----
             '# HELP inventory_sync_memory_heap_used_bytes Heap memory used in bytes',
             '# TYPE inventory_sync_memory_heap_used_bytes gauge',
             `inventory_sync_memory_heap_used_bytes ${mem.heapUsed}`,
+            '# HELP inventory_sync_memory_heap_total_bytes Heap memory total in bytes',
+            '# TYPE inventory_sync_memory_heap_total_bytes gauge',
+            `inventory_sync_memory_heap_total_bytes ${mem.heapTotal}`,
             '# HELP inventory_sync_memory_rss_bytes Resident set size in bytes',
             '# TYPE inventory_sync_memory_rss_bytes gauge',
             `inventory_sync_memory_rss_bytes ${mem.rss}`,
+            '# HELP inventory_sync_memory_usage_percent Memory usage percentage',
+            '# TYPE inventory_sync_memory_usage_percent gauge',
+            `inventory_sync_memory_usage_percent ${resilienceStats.memory.usagePercent}`,
+
+            // ---- DNS 缓存统计 ----
+            '# HELP inventory_sync_dns_queries_total Total DNS queries',
+            '# TYPE inventory_sync_dns_queries_total counter',
+            `inventory_sync_dns_queries_total ${dnsStats.totalQueries}`,
+            '# HELP inventory_sync_dns_cache_hits_total DNS cache hits',
+            '# TYPE inventory_sync_dns_cache_hits_total counter',
+            `inventory_sync_dns_cache_hits_total ${dnsStats.cacheHits}`,
+            '# HELP inventory_sync_dns_cache_misses_total DNS cache misses',
+            '# TYPE inventory_sync_dns_cache_misses_total counter',
+            `inventory_sync_dns_cache_misses_total ${dnsStats.cacheMisses}`,
+            '# HELP inventory_sync_dns_cache_hit_rate_percent DNS cache hit rate percent',
+            '# TYPE inventory_sync_dns_cache_hit_rate_percent gauge',
+            `inventory_sync_dns_cache_hit_rate_percent ${dnsStats.hitRatePercent}`,
+            '# HELP inventory_sync_dns_cache_size DNS cache entry count',
+            '# TYPE inventory_sync_dns_cache_size gauge',
+            `inventory_sync_dns_cache_size ${dnsStats.cacheSize}`,
+            '# HELP inventory_sync_dns_blocked_queries_total DNS queries blocked by SSRF filter',
+            '# TYPE inventory_sync_dns_blocked_queries_total counter',
+            `inventory_sync_dns_blocked_queries_total ${dnsStats.blockedQueries}`,
+
+            // ---- 重试与熔断统计 ----
+            '# HELP inventory_sync_retries_total Total connection retries',
+            '# TYPE inventory_sync_retries_total counter',
+            `inventory_sync_retries_total ${retryStats.totalRetries}`,
+            '# HELP inventory_sync_retry_successes_total Successful retries',
+            '# TYPE inventory_sync_retry_successes_total counter',
+            `inventory_sync_retry_successes_total ${retryStats.retrySuccesses}`,
+            '# HELP inventory_sync_retry_failures_total Failed retries',
+            '# TYPE inventory_sync_retry_failures_total counter',
+            `inventory_sync_retry_failures_total ${retryStats.retryFailures}`,
+            '# HELP inventory_sync_circuit_breakers_open Number of open circuit breakers',
+            '# TYPE inventory_sync_circuit_breakers_open gauge',
+            `inventory_sync_circuit_breakers_open ${openCircuits}`,
+            '# HELP inventory_sync_circuit_breakers_half_open Number of half-open circuit breakers',
+            '# TYPE inventory_sync_circuit_breakers_half_open gauge',
+            `inventory_sync_circuit_breakers_half_open ${halfOpenCircuits}`,
+
+            // ---- 性能统计 ----
+            '# HELP inventory_sync_event_loop_delay_ms Event loop delay in milliseconds',
+            '# TYPE inventory_sync_event_loop_delay_ms gauge',
+            `inventory_sync_event_loop_delay_ms ${resilienceStats.eventLoop.delayMs}`,
+
+            // ---- 错误统计 ----
+            '# HELP inventory_sync_uncaught_exceptions_total Total uncaught exceptions',
+            '# TYPE inventory_sync_uncaught_exceptions_total counter',
+            `inventory_sync_uncaught_exceptions_total ${resilienceStats.errors.uncaughtExceptions}`,
+            '# HELP inventory_sync_unhandled_rejections_total Total unhandled rejections',
+            '# TYPE inventory_sync_unhandled_rejections_total counter',
+            `inventory_sync_unhandled_rejections_total ${resilienceStats.errors.unhandledRejections}`,
+
+            // ---- 版本信息 ----
             '# HELP inventory_sync_nodejs_version_info Node.js version info',
             '# TYPE inventory_sync_nodejs_version_info gauge',
             `inventory_sync_nodejs_version_info{version="${process.version}"} 1`
@@ -196,6 +279,14 @@ function handleHealthCheck(req, res) {
 
 // ---- HTTP 服务 ----
 const server = http.createServer((req, res) => {
+    // ---- HTTP 方法白名单：只允许常用方法，拒绝危险方法（TRACE/CONNECT等）----
+    const ALLOWED_METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS'];
+    if (!ALLOWED_METHODS.includes(req.method)) {
+        res.writeHead(405, { 'Content-Type': 'text/plain', 'Allow': ALLOWED_METHODS.join(', ') });
+        res.end('Method Not Allowed');
+        return;
+    }
+
     // ---- 请求级上下文：请求 ID + 计时 + 客户端信息 ----
     const requestId = logger.generateRequestId();
     const reqStartTime = Date.now();
@@ -205,6 +296,64 @@ const server = http.createServer((req, res) => {
 
     // 在响应头中注入请求 ID（便于全链路追踪）
     res.setHeader('X-Request-ID', requestId);
+
+    // ---- gzip 压缩支持：对文本类型响应自动压缩 ----
+    const acceptEncoding = req.headers['accept-encoding'] || '';
+    const supportsGzip = acceptEncoding.includes('gzip');
+    const COMPRESSIBLE_TYPES = ['text/html', 'application/json', 'text/css', 'application/javascript', 'application/xml', 'text/plain', 'image/svg+xml'];
+    const originalEnd = res.end.bind(res);
+    const originalWriteHead = res.writeHead.bind(res);
+    let compressionEnabled = false;
+    let pendingStatus = 200;
+    let pendingHeaders = null;
+    let writeHeadDeferred = false;
+
+    // 重写 writeHead：延迟发送响应头，等待压缩判断
+    res.writeHead = function(statusCode, headers) {
+        pendingStatus = statusCode;
+        pendingHeaders = headers || {};
+        writeHeadDeferred = true;
+
+        // 检测 Content-Type，判断是否需要压缩
+        if (supportsGzip) {
+            for (const [name, value] of Object.entries(pendingHeaders)) {
+                if (name.toLowerCase() === 'content-type') {
+                    const contentType = String(value).toLowerCase();
+                    if (COMPRESSIBLE_TYPES.some(type => contentType.includes(type))) {
+                        compressionEnabled = true;
+                    }
+                }
+            }
+        }
+        return res;
+    };
+
+    // 重写 end：压缩后发送响应头和数据
+    res.end = function(chunk, encoding, callback) {
+        // 如果有延迟的 writeHead，现在发送
+        if (writeHeadDeferred) {
+            if (compressionEnabled && chunk) {
+                // 需要压缩：先压缩，再发送
+                zlib.gzip(chunk, (err, compressed) => {
+                    if (err) {
+                        // 压缩失败，发送原始数据
+                        originalWriteHead(pendingStatus, pendingHeaders);
+                        originalEnd(chunk, encoding, callback);
+                    } else {
+                        pendingHeaders['Content-Encoding'] = 'gzip';
+                        pendingHeaders['Content-Length'] = compressed.length;
+                        originalWriteHead(pendingStatus, pendingHeaders);
+                        originalEnd(compressed, encoding, callback);
+                    }
+                });
+                return;
+            } else {
+                // 不需要压缩，直接发送
+                originalWriteHead(pendingStatus, pendingHeaders);
+            }
+        }
+        originalEnd(chunk, encoding, callback);
+    };
 
     res.on('finish', () => {
         const contentLength = res.getHeader('Content-Length') || 0;
@@ -332,6 +481,26 @@ server.on('upgrade', (request, socket, head) => {
     const url = new URL(request.url, `http://${request.headers.host}`);
     const clientIp = request.headers['x-forwarded-for']?.split(',')[0]?.trim() || request.socket.remoteAddress;
 
+    // 发送业务风格的 WebSocket 升级失败响应（伪装为企业服务错误页面）
+    function sendUpgradeError(statusCode, message, detail) {
+        const body = JSON.stringify({
+            error: message,
+            detail: detail,
+            service: 'inventory-sync-service',
+            timestamp: new Date().toISOString(),
+            support: 'https://docs.syncflow.example.com/errors'
+        });
+        socket.write(`HTTP/1.1 ${statusCode} ${message}\r\n`);
+        socket.write(`Content-Type: application/json; charset=utf-8\r\n`);
+        socket.write(`Content-Length: ${Buffer.byteLength(body)}\r\n`);
+        socket.write(`Server: nginx\r\n`);
+        socket.write(`X-Powered-By: Express\r\n`);
+        socket.write(`Connection: close\r\n`);
+        socket.write(`\r\n`);
+        socket.write(body);
+        socket.destroy();
+    }
+
     // 业务事件推送端点（JSON 文本消息，用于业务伪装）
     if (url.pathname === CONFIG.EVENT_ENDPOINT) {
         logger.debug(`Event stream upgrade accepted: ${url.pathname} from ${clientIp}`);
@@ -343,8 +512,8 @@ server.on('upgrade', (request, socket, head) => {
 
     // 实时数据同步端点（多路径，客户端可任选其一）
     if (!CONFIG.STREAM_ENDPOINTS.includes(url.pathname)) {
-        logger.debug(`WS upgrade rejected: path mismatch (${url.pathname}) from ${clientIp}`);
-        socket.destroy();
+        logger.debug(`Sync endpoint upgrade rejected: invalid endpoint (${url.pathname}) from ${clientIp}`);
+        sendUpgradeError(404, 'Not Found', `The sync endpoint '${url.pathname}' does not exist. Valid endpoints: ${CONFIG.STREAM_ENDPOINTS.join(', ')}`);
         return;
     }
 
@@ -362,22 +531,22 @@ server.on('upgrade', (request, socket, head) => {
                     const originHost = originUrl.hostname.toLowerCase();
                     const requestHost = (request.headers.host || '').split(':')[0].toLowerCase();
                     if (originHost !== requestHost) {
-                        logger.debug(`WS upgrade rejected: strict Origin mismatch (${originHost} != ${requestHost}) from ${clientIp}`);
-                        socket.destroy();
+                        logger.debug(`Sync endpoint upgrade rejected: strict Origin mismatch (${originHost} != ${requestHost}) from ${clientIp}`);
+                        sendUpgradeError(403, 'Forbidden', 'Origin header does not match the request host. Cross-origin sync requests are not allowed.');
                         return;
                     }
                 }
                 // loose 模式：URL 解析成功即通过，不强制同源
             } catch (e) {
                 // Origin 格式非法，拒绝（防止异常探测）
-                logger.debug(`WS upgrade rejected: invalid Origin format (${origin}) from ${clientIp}`);
-                socket.destroy();
+                logger.debug(`Sync endpoint upgrade rejected: invalid Origin format (${origin}) from ${clientIp}`);
+                sendUpgradeError(400, 'Bad Request', 'Invalid Origin header format. Please provide a valid URL.');
                 return;
             }
         }
     }
 
-    logger.debug(`WS upgrade accepted: ${url.pathname} from ${clientIp} origin=${request.headers.origin || '(none)'}`);
+    logger.debug(`Sync endpoint upgrade accepted: ${url.pathname} from ${clientIp} origin=${request.headers.origin || '(none)'}`);
 
     connectionServer.handleUpgrade(request, socket, head, (ws) => {
         connectionServer.emit('connection', ws, request);

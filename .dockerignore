@@ -9,3 +9,5 @@ npm-debug.log
 .idea
 *.log
 .DS_Store
+*.map
+dist
