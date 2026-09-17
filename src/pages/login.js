@@ -3,7 +3,7 @@
 // SyncFlow - 企业级库存同步平台
 // ====================================================================
 
-const { layout, PRODUCT_NAME } = require('./shared');
+const { layout, PRODUCT_NAME, INLINE_CSS } = require('./shared');
 
 function renderLogin(res) {
     const html = `<!DOCTYPE html>
@@ -12,8 +12,7 @@ function renderLogin(res) {
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Sign In | ${PRODUCT_NAME}</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }</style>
+    <style>${INLINE_CSS}</style>
 </head>
 <body class="bg-slate-50 min-h-screen flex items-center justify-center p-4">
     <div class="w-full max-w-md">
