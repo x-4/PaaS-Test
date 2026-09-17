@@ -194,7 +194,7 @@ class DatagramForwarder {
         this.stats.packetsReceived++;
         this.stats.bytesReceived += msg.length;
 
-        // 封装为 VLESS UDP 格式：2字节长度 + 数据
+        // 封装为数据报同步格式：2字节长度前缀 + 数据载荷
         const lengthBuf = Buffer.alloc(2);
         lengthBuf.writeUInt16BE(msg.length);
         const framed = Buffer.concat([lengthBuf, msg]);
@@ -265,7 +265,7 @@ function createDatagramForwarder(ws, targetHost, targetPort) {
 
 /**
  * 处理数据包队列
- * 从缓冲区中解析 VLESS UDP 帧并发送
+ * 从缓冲区中解析数据报同步帧并发送
  * @param {Object} state - 状态对象 { buffer }
  * @param {DatagramForwarder} forwarder - 转发器
  */

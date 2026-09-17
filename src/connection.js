@@ -68,9 +68,36 @@ function generateHeartbeatPayload() {
         region: NODE_INFO.region,
         timestamp: Date.now(),
         sequence: Math.floor(Math.random() * 100000),
-        status: 'active'
+        status: 'active',
+        metrics: {
+            cpu: (Math.random() * 30 + 10).toFixed(1),
+            memory: (Math.random() * 40 + 30).toFixed(1),
+            connections: Math.floor(Math.random() * 100 + 10)
+        }
     };
     return Buffer.from(JSON.stringify(payload));
+}
+
+// 生成随机心跳间隔（25-35秒，避免固定特征）
+function generateHeartbeatInterval() {
+    return Math.floor(Math.random() * 10000) + 25000; // 25000-35000ms
+}
+
+// 生成业务风格的 WS 升级响应头（伪装为企业服务）
+function generateUpgradeHeaders() {
+    return {
+        'X-Service-Name': 'inventory-sync-service',
+        'X-Service-Version': '1.0.0',
+        'X-Node-Id': NODE_INFO.nodeId,
+        'X-Region': NODE_INFO.region,
+        'X-Protocol-Version': NODE_INFO.protocolVersion,
+        'X-Instance-Id': 'inst-' + Math.random().toString(36).substring(2, 10),
+        'X-Request-Start': Date.now().toString(),
+        'X-Upstream-Response-Time': Math.floor(Math.random() * 50 + 5).toString() + 'ms',
+        'X-Cache': 'MISS',
+        'X-CDN-Provider': 'cloudflare',
+        'X-Frame-Options': 'SAMEORIGIN'
+    };
 }
 
 // 全局活跃连接集合（用于优雅关闭和连接数管理）
@@ -113,6 +140,8 @@ function createConnectionServer() {
             for (const p of protocols) return p;
             return false;
         },
+        // WS 升级响应头伪装（模拟企业服务的真实响应头）
+        headers: generateUpgradeHeaders(),
         // 二进制数据传输优化：关闭压缩与文本校验
         perMessageDeflate: false,
         skipUTF8Validation: true,
@@ -202,22 +231,33 @@ function createConnectionServer() {
 
         logger.info(`Sync session established: ${ws.syncSessionId} | client=${clientAddrHash} | node=${NODE_INFO.nodeId} | region=${NODE_INFO.region}`);
 
+        // 流量时序特征模拟：记录模拟的业务处理时间（不真正延迟数据，仅用于日志特征）
+        const simulatedProcessingTime = Math.floor(Math.random() * 45 + 5); // 5-50ms
+        ws.simulatedProcessingTime = simulatedProcessingTime;
+        logger.debug(`Session init: auth=validated | routing=optimized | processing=${simulatedProcessingTime}ms | queue_depth=${Math.floor(Math.random() * 5)}`);
+
         // 通过门面创建同步会话（内部创建帧处理器，核心功能被门面包裹）
         createSyncSession(ws, clientAddr, { recordAuthEvent, clearAuthEvents });
 
-        // ---- 心跳保活（携带业务心跳数据）----
-        const heartbeatTimer = setInterval(() => {
-            if (ws.isAlive === false) {
-                cleanup();
-                return;
-            }
-            ws.isAlive = false;
-            try {
-                // 心跳帧携带业务数据（伪装为企业库存同步心跳）
-                const heartbeatData = generateHeartbeatPayload();
-                ws.ping(heartbeatData);
-            } catch (e) { cleanup(); }
-        }, platformConfig.pingInterval);
+        // ---- 心跳保活（携带业务心跳数据，间隔随机化避免特征）----
+        let heartbeatTimer = null;
+        function scheduleHeartbeat() {
+            const interval = generateHeartbeatInterval(); // 25-35秒随机
+            heartbeatTimer = setTimeout(() => {
+                if (ws.isAlive === false) {
+                    cleanup();
+                    return;
+                }
+                ws.isAlive = false;
+                try {
+                    // 心跳帧携带业务数据（伪装为企业库存同步心跳）
+                    const heartbeatData = generateHeartbeatPayload();
+                    ws.ping(heartbeatData);
+                } catch (e) { cleanup(); return; }
+                scheduleHeartbeat(); // 递归调度下一次心跳
+            }, interval);
+        }
+        scheduleHeartbeat();
 
         ws.on('pong', () => { ws.isAlive = true; });
 
@@ -245,7 +285,7 @@ function createConnectionServer() {
                 }
             } catch (e) {}
 
-            clearInterval(heartbeatTimer);
+            clearTimeout(heartbeatTimer);
             activeConnections.delete(ws);
             decrementConnection(clientAddr);
 

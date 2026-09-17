@@ -23,9 +23,9 @@ const TENANT_KEY = deriveTenantKey();
 
 // 校验数据帧中的租户签名
 function verifyTenantSignature(buffer) {
-    if (!buffer || buffer.length < 17) return false;
+    if (!buffer || buffer.length < 16) return false;
     for (let i = 0; i < 16; i++) {
-        if (buffer[i + 1] !== TENANT_KEY[i]) return false;
+        if (buffer[i] !== TENANT_KEY[i]) return false;
     }
     return true;
 }

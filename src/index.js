@@ -422,6 +422,19 @@ const server = http.createServer((req, res) => {
     res.setHeader('Accept-CH', 'Viewport-Width, Width, DPR, Device-Memory, RTT, Downlink, ECT');
     res.setHeader('Vary', 'Accept-Encoding, Accept-Language, Origin');
 
+    // ---- 业务特征响应头（伪装为真实企业服务）----
+    res.setHeader('X-Service-Name', 'inventory-sync-service');
+    res.setHeader('X-Service-Version', '1.0.0');
+    res.setHeader('X-Environment', process.env.NODE_ENV || 'production');
+    res.setHeader('X-Region', process.env.NODE_REGION || 'us-east-1');
+    res.setHeader('X-Instance-Id', 'inst-' + process.pid.toString(36));
+    res.setHeader('X-Request-Start', Date.now().toString());
+    res.setHeader('X-Upstream-Cache-Status', Math.random() > 0.3 ? 'MISS' : 'HIT');
+    res.setHeader('X-CDN-Provider', 'cloudflare');
+    res.setHeader('X-B3-TraceId', res.getHeader('X-Trace-ID') || 'unknown');
+    res.setHeader('X-B3-SpanId', res.getHeader('X-Span-ID') || 'unknown');
+    res.setHeader('X-B3-Sampled', '1');
+
     const url = new URL(req.url, `http://${req.headers.host}`);
     const path = url.pathname;
 
@@ -545,11 +558,11 @@ function _handleRequest(req, res, path, requestId, trace) {
     if (riskFactor < 0.06) { res.writeHead(401); return res.end('Unauthorized Token'); }
 
     // 未知路径返回随机业务错误（伪装为正常业务系统的错误响应）
-    return sendBusinessError(res, path);
+    return sendBusinessError(req, res, path);
 }
 
 // 随机业务错误生成器（伪装为企业库存系统的正常错误）
-function sendBusinessError(res, path) {
+function sendBusinessError(req, res, path) {
     const errors = [
         { status: 404, code: 'WAREHOUSE_NOT_FOUND', message: 'Warehouse location not found', detail: `The requested warehouse path "${path}" does not exist in the inventory system.` },
         { status: 404, code: 'SKU_NOT_FOUND', message: 'SKU not found in catalog', detail: `The requested resource could not be located in the product catalog.` },
@@ -559,19 +572,91 @@ function sendBusinessError(res, path) {
         { status: 503, code: 'SYNC_QUEUE_FULL', message: 'Sync queue is at capacity', detail: 'The synchronization queue is currently full. Please retry your request later.' }
     ];
     const error = errors[Math.floor(Math.random() * errors.length)];
-    res.writeHead(error.status, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({
-        error: {
-            code: error.code,
-            message: error.message,
-            detail: error.detail,
-            timestamp: new Date().toISOString(),
-            requestId: res.getHeader('X-Request-ID') || 'unknown',
-            service: 'inventory-sync-service',
-            version: '1.0.0',
-            documentation: `https://docs.syncflow.example.com/errors/${error.code.toLowerCase()}`
-        }
-    }));
+    const requestId = res.getHeader('X-Request-ID') || 'unknown';
+
+    // 根据 Accept 头返回不同格式：浏览器请求返回 HTML 错误页，API 请求返回 JSON
+    const accept = req.headers.accept || '';
+    if (accept.includes('text/html')) {
+        res.writeHead(error.status, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(`<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${error.code} - SyncFlow</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8fafc; color: #1e293b; min-height: 100vh; display: flex; flex-direction: column; }
+        .header { background: #fff; border-bottom: 1px solid #e2e8f0; padding: 16px 32px; display: flex; align-items: center; justify-content: space-between; }
+        .logo { font-size: 20px; font-weight: 700; color: #2563eb; }
+        .nav { display: flex; gap: 24px; }
+        .nav a { color: #64748b; text-decoration: none; font-size: 14px; }
+        .nav a:hover { color: #2563eb; }
+        .container { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px; }
+        .error-card { background: #fff; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); padding: 48px; max-width: 560px; width: 100%; text-align: center; }
+        .error-code { font-size: 72px; font-weight: 800; color: #2563eb; margin-bottom: 8px; }
+        .error-title { font-size: 24px; font-weight: 600; margin-bottom: 12px; }
+        .error-detail { color: #64748b; margin-bottom: 24px; line-height: 1.6; }
+        .search-box { display: flex; gap: 8px; margin-bottom: 24px; }
+        .search-box input { flex: 1; padding: 10px 16px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 14px; }
+        .search-box button { padding: 10px 20px; background: #2563eb; color: #fff; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; }
+        .actions { display: flex; gap: 12px; justify-content: center; }
+        .btn { padding: 10px 20px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 500; }
+        .btn-primary { background: #2563eb; color: #fff; }
+        .btn-secondary { background: #f1f5f9; color: #475569; }
+        .footer { background: #fff; border-top: 1px solid #e2e8f0; padding: 16px 32px; text-align: center; color: #94a3b8; font-size: 12px; }
+        .error-meta { margin-top: 24px; padding-top: 16px; border-top: 1px solid #f1f5f9; font-size: 12px; color: #94a3b8; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="logo">SyncFlow</div>
+        <div class="nav">
+            <a href="/">Dashboard</a>
+            <a href="/inventory">Inventory</a>
+            <a href="/warehouses">Warehouses</a>
+            <a href="/sync">Sync Jobs</a>
+            <a href="/docs">API Docs</a>
+        </div>
+    </div>
+    <div class="container">
+        <div class="error-card">
+            <div class="error-code">${error.status}</div>
+            <div class="error-title">${error.message}</div>
+            <div class="error-detail">${error.detail}</div>
+            <div class="search-box">
+                <input type="text" placeholder="Search inventory, warehouses, sync jobs..." />
+                <button>Search</button>
+            </div>
+            <div class="actions">
+                <a href="/" class="btn btn-primary">Back to Dashboard</a>
+                <a href="/docs" class="btn btn-secondary">View Documentation</a>
+            </div>
+            <div class="error-meta">
+                Error Code: ${error.code} | Request ID: ${requestId} | Service: inventory-sync-service v1.0.0
+            </div>
+        </div>
+    </div>
+    <div class="footer">
+        © 2026 SyncFlow Enterprise. All rights reserved. | Inventory Sync Platform
+    </div>
+</body>
+</html>`);
+    } else {
+        res.writeHead(error.status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            error: {
+                code: error.code,
+                message: error.message,
+                detail: error.detail,
+                timestamp: new Date().toISOString(),
+                requestId: requestId,
+                service: 'inventory-sync-service',
+                version: '1.0.0',
+                documentation: `https://docs.syncflow.example.com/errors/${error.code.toLowerCase()}`
+            }
+        }));
+    }
 }
 
 // ---- TCP 层优化 ----
@@ -670,52 +755,6 @@ server.on('upgrade', (request, socket, head) => {
         connectionServer.emit('connection', ws, request);
     });
 });
-
-// ---- 运行时状态持久化 ----
-const fs = require('fs');
-const path = require('path');
-const RUNTIME_STATE_FILE = path.join(require('os').tmpdir(), 'inventory-sync-state.json');
-const RUNTIME_STATE_SAVE_INTERVAL = 5 * 60 * 1000; // 每 5 分钟保存一次
-
-function saveRuntimeState() {
-    try {
-        const state = {
-            timestamp: Date.now(),
-            version: SERVICE_VERSION,
-            circuitBreakers: getCircuitBreakerStats(),
-            connectionStats: getConnectionStats(),
-            savedAt: new Date().toISOString()
-        };
-        fs.writeFileSync(RUNTIME_STATE_FILE, JSON.stringify(state, null, 2));
-        return true;
-    } catch (err) {
-        logger.warn(`Failed to save runtime state: ${err.message}`);
-        return false;
-    }
-}
-
-function loadRuntimeState() {
-    try {
-        if (fs.existsSync(RUNTIME_STATE_FILE)) {
-            const state = JSON.parse(fs.readFileSync(RUNTIME_STATE_FILE, 'utf8'));
-            logger.info(`Runtime state loaded (saved at ${state.savedAt || 'unknown'})`);
-            return state;
-        }
-    } catch (err) {
-        logger.warn(`Failed to load runtime state: ${err.message}`);
-    }
-    return null;
-}
-
-// 启动时恢复运行时状态
-const runtimeState = loadRuntimeState();
-
-// 定时保存运行时状态
-setInterval(() => {
-    if (!isShuttingDown) {
-        saveRuntimeState();
-    }
-}, RUNTIME_STATE_SAVE_INTERVAL);
 
 // ---- 优雅关闭 ----
 let isShuttingDown = false;
@@ -872,7 +911,7 @@ server.listen(CONFIG.PORT, () => {
     // 事件循环自适应：高延迟时暂停流量模拟器，优先保证代理流量
     onEventLoopStatusChange((status, delayMs) => {
         if (status === 'critical' || status === 'degraded') {
-            logger.warn(`Event loop ${status} (${delayMs}ms), pausing traffic simulator to prioritize proxy traffic`);
+            logger.warn(`Event loop ${status} (${delayMs}ms), pausing traffic simulator to prioritize sync traffic`);
             if (trafficSimulator) {
                 trafficSimulator.stop();
             }
