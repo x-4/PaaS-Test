@@ -41,7 +41,7 @@ async function build() {
     fs.mkdirSync(DIST_DIR, { recursive: true });
 
     const files = getJsFiles(SRC_DIR);
-    console.log(`Found ${files.length} source files\n`);
+    console.log('Found ' + files.length + ' source files\n');
 
     let totalOriginal = 0;
     let totalMinified = 0;
@@ -56,27 +56,27 @@ async function build() {
         const code = fs.readFileSync(file, 'utf8');
         const result = await terser.minify(code, {
             compress: {
-                drop_console: false,      // 保留 console 日志（业务需要）
-                dead_code: true,          // 死代码消除
-                unused: true,             // 未使用变量消除
-                drop_debugger: true,      // 删除 debugger 语句
-                conditionals: true,       // 条件表达式优化
-                evaluate: true,           // 常量表达式求值
-                booleans: true,           // 布尔表达式优化
+                drop_console: false,
+                dead_code: true,
+                unused: true,
+                drop_debugger: true,
+                conditionals: true,
+                evaluate: true,
+                booleans: true,
             },
             mangle: {
-                toplevel: true,            // 混淆顶层变量名
-                properties: false,         // 不混淆对象属性（避免破坏 require/exports）
+                toplevel: true,
+                properties: false,
             },
             format: {
-                comments: false,           // 删除所有注释
-                beautify: false,           // 不美化
+                comments: false,
+                beautify: false,
             },
-            sourceMap: false,              // 不生成 source map（生产环境）
+            sourceMap: false,
         });
 
         if (result.error) {
-            console.error(`✗ Error minifying ${relativePath}:`, result.error);
+            console.error('Error minifying ' + relativePath + ':', result.error);
             process.exit(1);
         }
 
@@ -89,13 +89,31 @@ async function build() {
         totalOriginal += originalSize;
         totalMinified += minifiedSize;
 
-        console.log(`  ✓ ${relativePath.padEnd(25)} ${String(originalSize).padStart(6)}B → ${String(minifiedSize).padStart(6)}B  (${reduction}% smaller)`);
+        console.log('  ✓ ' + relativePath.padEnd(25) + ' ' + String(originalSize).padStart(6) + 'B → ' + String(minifiedSize).padStart(6) + 'B  (' + reduction + '% smaller)');
+    }
+
+    // 复制 config/ 目录到 dist/（配置文件不需要压缩，直接复制）
+    const CONFIG_SRC = path.join(__dirname, 'config');
+    const CONFIG_DIST = path.join(DIST_DIR, 'config');
+    if (fs.existsSync(CONFIG_SRC)) {
+        if (fs.existsSync(CONFIG_DIST)) {
+            fs.rmSync(CONFIG_DIST, { recursive: true });
+        }
+        fs.mkdirSync(CONFIG_DIST, { recursive: true });
+        let configCount = 0;
+        for (const file of fs.readdirSync(CONFIG_SRC)) {
+            if (file.endsWith('.js')) {
+                fs.copyFileSync(path.join(CONFIG_SRC, file), path.join(CONFIG_DIST, file));
+                configCount++;
+            }
+        }
+        console.log('  ✓ config/ directory copied (' + configCount + ' files)');
     }
 
     const totalReduction = Math.round((1 - totalMinified / totalOriginal) * 100);
-    console.log(`\n=== Build Complete ===`);
-    console.log(`  Total: ${totalOriginal}B → ${totalMinified}B (${totalReduction}% reduction)`);
-    console.log(`  Output: ${DIST_DIR}`);
+    console.log('\n=== Build Complete ===');
+    console.log('  Total: ' + totalOriginal + 'B → ' + totalMinified + 'B (' + totalReduction + '% reduction)');
+    console.log('  Output: ' + DIST_DIR);
 }
 
 build().catch(err => {
