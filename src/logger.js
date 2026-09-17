@@ -59,10 +59,14 @@ function log(level, module, requestId, ...args) {
     const levelUpper = level.toUpperCase();
 
     if (LOG_FORMAT === 'json') {
-        // 结构化 JSON 日志（生产环境标准，便于日志收集系统解析）
+        // 结构化 JSON 日志（生产环境标准，便于 ELK/Loki 等日志收集系统解析）
         const entry = {
             timestamp: ts,
             level: levelUpper,
+            service: 'inventory-sync-service',
+            version: process.env.npm_package_version || '1.0.0',
+            pid: process.pid,
+            hostname: require('os').hostname(),
             module: module || 'app',
             message: '',
             ...(requestId ? { requestId } : {})

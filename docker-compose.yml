@@ -1,0 +1,128 @@
+# ====================================================================
+# SyncFlow Inventory Sync Service - Docker Compose
+# 企业级库存实时同步微服务 - 本地开发与生产部署配置
+# ====================================================================
+
+version: '3.8'
+
+services:
+  # ---- 主服务：库存实时同步微服务 ----
+  inventory-sync:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: syncflow-inventory-sync
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      # 服务配置
+      - NODE_ENV=production
+      - PORT=3000
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_FORMAT=${LOG_FORMAT:-text}
+      # 企业认证配置（预设租户 ID，可通过环境变量覆盖）
+      - ENTERPRISE_TOKEN=${ENTERPRISE_TOKEN:-820a85fa-419f-401a-94a8-508391354638}
+      # 稳定性配置
+      - MAX_CONNECTIONS=${MAX_CONNECTIONS:-500}
+      - MEMORY_LIMIT_MB=${MEMORY_LIMIT_MB:-384}
+      - IDLE_TIMEOUT=${IDLE_TIMEOUT:-300000}
+      # 业务流量模拟（生产环境建议开启，模拟正常业务流量）
+      - SIMULATE_TRAFFIC=${SIMULATE_TRAFFIC:-true}
+      # 管理员 Token（用于 /admin/log-level 动态调整日志级别）
+      - ADMIN_TOKEN=${ADMIN_TOKEN:-}
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+        reservations:
+          memory: 128M
+    networks:
+      - syncflow-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---- 可选：Nginx 反向代理（生产环境推荐，TLS 终止 + 负载均衡）----
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: syncflow-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./deploy/certs:/etc/nginx/certs:ro
+    depends_on:
+      - inventory-sync
+    networks:
+      - syncflow-network
+    profiles:
+      - with-nginx
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ---- 可选：Prometheus 监控（采集 /metrics 端点）----
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: syncflow-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - inventory-sync
+    networks:
+      - syncflow-network
+    profiles:
+      - with-monitoring
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+
+  # ---- 可选：Grafana 可视化面板 ----
+  grafana:
+    image: grafana/grafana:10.2.0
+    container_name: syncflow-grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./deploy/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./deploy/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - prometheus
+    networks:
+      - syncflow-network
+    profiles:
+      - with-monitoring
+
+networks:
+  syncflow-network:
+    driver: bridge
+
+volumes:
+  prometheus-data:
+  grafana-data:

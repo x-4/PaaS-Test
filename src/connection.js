@@ -309,12 +309,16 @@ function cleanupIdleConnections(idleThresholdMs = 300000) {
 // 连接健康巡检：检测假活连接（TCP已断开但未触发close事件）
 // 检测方法：对于空闲超过阈值的连接，发送ping检测，如果readyState不是OPEN则清理
 // 异常流量检测：单连接速率超过阈值则断开（防止攻击）
+// 慢连接检测：长时间低速率连接（可能是半开连接）自动清理
 const ABNORMAL_TRAFFIC_THRESHOLD = 50 * 1024 * 1024; // 50MB/s 异常流量阈值
+const SLOW_CONNECTION_MIN_DURATION = 5 * 60 * 1000; // 慢连接最小时长（5分钟）
+const SLOW_CONNECTION_RATE_THRESHOLD = 100; // 慢连接速率阈值（100 bytes/s）
 function healthCheckConnections() {
     const now = Date.now();
     let staleFound = 0;
     let cleaned = 0;
     let abnormalFound = 0;
+    let slowFound = 0;
 
     for (const ws of activeConnections) {
         // 检查1：readyState 异常（不是 OPEN 状态但仍在 activeConnections 中）
@@ -328,13 +332,15 @@ function healthCheckConnections() {
             continue;
         }
 
+        const connectionDuration = now - (ws.connectionStartTime || now);
+        const connectionDurationSec = connectionDuration / 1000;
+
         // 检查2：异常流量检测（单连接速率超过 50MB/s）
-        const connectionDuration = (now - (ws.connectionStartTime || now)) / 1000;
-        if (connectionDuration > 5) { // 连接超过 5 秒才检测
-            const avgRate = (ws.bytesIn || 0) / connectionDuration;
+        if (connectionDurationSec > 5) { // 连接超过 5 秒才检测
+            const avgRate = (ws.bytesIn || 0) / connectionDurationSec;
             if (avgRate > ABNORMAL_TRAFFIC_THRESHOLD) {
                 abnormalFound++;
-                logger.warn(`Abnormal traffic detected: session=${ws.syncSessionId} | rate=${(avgRate / 1024 / 1024).toFixed(1)}MB/s | bytesIn=${ws.bytesIn} | duration=${connectionDuration.toFixed(1)}s`);
+                logger.warn(`Abnormal traffic detected: session=${ws.syncSessionId} | rate=${(avgRate / 1024 / 1024).toFixed(1)}MB/s | bytesIn=${ws.bytesIn} | duration=${connectionDurationSec.toFixed(1)}s`);
                 try {
                     ws.close(1013, 'Service busy');
                     cleaned++;
@@ -343,7 +349,23 @@ function healthCheckConnections() {
             }
         }
 
-        // 检查3：长时间无活动且无响应（超过 10 分钟无任何活动）
+        // 检查3：慢连接检测（连接超过5分钟，平均速率低于100 bytes/s，且不是完全空闲）
+        if (connectionDuration > SLOW_CONNECTION_MIN_DURATION) {
+            const avgRate = (ws.bytesIn || 0) / connectionDurationSec;
+            const idleTime = now - (ws.lastActivity || now);
+            // 有数据但速率极低，且最近有活动（不是完全空闲），可能是半开连接
+            if (avgRate > 0 && avgRate < SLOW_CONNECTION_RATE_THRESHOLD && idleTime < 60000) {
+                slowFound++;
+                logger.warn(`Slow connection detected: session=${ws.syncSessionId} | rate=${avgRate.toFixed(1)}B/s | bytesIn=${ws.bytesIn} | duration=${connectionDurationSec.toFixed(0)}s`);
+                try {
+                    ws.close(1001, 'Connection timeout');
+                    cleaned++;
+                } catch (e) {}
+                continue;
+            }
+        }
+
+        // 检查4：长时间无活动且无响应（超过 10 分钟无任何活动）
         const idleTime = now - (ws.lastActivity || now);
         if (idleTime > 600000) { // 10 分钟
             staleFound++;
@@ -370,10 +392,10 @@ function healthCheckConnections() {
         }
     }
 
-    if (staleFound > 0 || cleaned > 0 || abnormalFound > 0) {
-        logger.info(`Connection health check: stale=${staleFound}, abnormal=${abnormalFound}, cleaned=${cleaned} (active=${activeConnections.size})`);
+    if (staleFound > 0 || cleaned > 0 || abnormalFound > 0 || slowFound > 0) {
+        logger.info(`Connection health check: stale=${staleFound}, abnormal=${abnormalFound}, slow=${slowFound}, cleaned=${cleaned} (active=${activeConnections.size})`);
     }
-    return { staleFound, abnormalFound, cleaned, active: activeConnections.size };
+    return { staleFound, abnormalFound, slowFound, cleaned, active: activeConnections.size };
 }
 
 // 关闭连接层

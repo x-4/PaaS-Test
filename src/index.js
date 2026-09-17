@@ -12,6 +12,8 @@ const { handleApiRequest } = require('./api');
 const { handleStaticRequest, sendNotFound } = require('./static');
 const { createConnectionServer, getActiveConnectionCount, getConnectionStats, getCircuitBreakerStats, cleanupIdleConnections, healthCheckConnections, shutdownConnections } = require('./connection');
 const { createEventStreamServer } = require('./event-stream');
+const { handleRealtimeUpgrade } = require('./realtime-ws');
+const { handleTraceRequest, startRequestTrace, endRequestTrace } = require('./tracing');
 const { handleDocsRequest } = require('./swagger');
 const {
     setupProcessErrorHandlers,
@@ -125,12 +127,14 @@ function handleHealthCheck(req, res) {
         return true;
     }
 
-    // 就绪探针：检查资源是否在安全范围内
+    // 就绪探针：检查资源是否在安全范围内 + 依赖检查
     if (READINESS_ENDPOINTS.includes(path)) {
         const memMB = parseInt(data.memory.heapUsed);
         const memoryOk = memMB < CONFIG.MEMORY_LIMIT_MB;
         const connOk = data.activeConnections < data.maxConnections;
-        const ready = memoryOk && connOk;
+        const dnsOk = global.__dnsAvailable !== false; // DNS 预热状态
+        const warmedUp = global.__warmedUp === true; // 启动预热完成状态
+        const ready = memoryOk && connOk && warmedUp;
 
         res.writeHead(ready ? 200 : 503, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         if (method === 'HEAD') { res.end(); return true; }
@@ -138,13 +142,16 @@ function handleHealthCheck(req, res) {
             status: ready ? 'READY' : 'NOT_READY',
             checks: {
                 memory: memoryOk ? 'pass' : 'fail',
-                connections: connOk ? 'pass' : 'fail'
+                connections: connOk ? 'pass' : 'fail',
+                dns: dnsOk ? 'pass' : 'warn',
+                warmedUp: warmedUp ? 'pass' : 'fail'
             },
             details: {
                 memoryUsed: data.memory.heapUsed,
                 memoryLimit: CONFIG.MEMORY_LIMIT_MB + 'MB',
                 activeConnections: data.activeConnections,
-                maxConnections: data.maxConnections
+                maxConnections: data.maxConnections,
+                uptime: process.uptime().toFixed(1) + 's'
             }
         }));
         return true;
@@ -300,8 +307,13 @@ const server = http.createServer((req, res) => {
     const reqUserAgent = req.headers['user-agent'] || '-';
     const reqReferer = req.headers['referer'] || '-';
 
-    // 在响应头中注入请求 ID（便于全链路追踪）
+    // 开始分布式追踪（APM 风格）
+    const trace = startRequestTrace(req);
+
+    // 在响应头中注入请求 ID 和追踪 ID（便于全链路追踪）
     res.setHeader('X-Request-ID', requestId);
+    res.setHeader('X-Trace-ID', trace.traceId);
+    res.setHeader('X-Span-ID', trace.spanId);
 
     // ---- gzip 压缩支持：对文本类型响应自动压缩 ----
     const acceptEncoding = req.headers['accept-encoding'] || '';
@@ -368,6 +380,8 @@ const server = http.createServer((req, res) => {
         logger.logAccess(requestId, req.method, req.url, res.statusCode, durationMs, contentLength, reqUserAgent, reqReferer, reqClientIp);
         // 慢请求记录（超过 1 秒自动告警）
         logger.logSlowRequest(requestId, req.method, req.url, durationMs, 1000);
+        // 结束分布式追踪
+        endRequestTrace(req, res);
     });
 
     // ---- 企业级安全响应头（模拟真实生产环境）----
@@ -380,12 +394,23 @@ const server = http.createServer((req, res) => {
     res.setHeader('X-XSS-Protection', '1; mode=block');
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    // TLS / HSTS（模拟启用 HTTPS 的生产环境，由 PaaS 反向代理终止 TLS）
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+    // Content-Security-Policy（现代企业应用标准）
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: https:; font-src 'self' https://cdn.jsdelivr.net; connect-src 'self' wss: ws:; frame-ancestors 'self'");
+    // HTTP/2 兼容提示（由 PaaS 平台升级，Node.js 服务声明支持）
+    res.setHeader('Alt-Svc', 'h2=":443"; ma=86400, h3=":443"; ma=86400');
+    res.setHeader('Accept-CH', 'Viewport-Width, Width, DPR, Device-Memory, RTT, Downlink, ECT');
+    res.setHeader('Vary', 'Accept-Encoding, Accept-Language, Origin');
 
     const url = new URL(req.url, `http://${req.headers.host}`);
     const path = url.pathname;
 
     // 统一健康检查（覆盖所有常见 PaaS / K8s / 监控系统端点）
     if (handleHealthCheck(req, res)) return;
+
+    // 分布式追踪与诊断端点（APM 风格，需要调试 Token）
+    if (handleTraceRequest(req, res)) return;
 
     // ---- 管理端点：日志级别动态调整（需要管理员 Token）----
     if (path === '/admin/log-level' || path === '/api/v1/admin/log-level') {
@@ -516,8 +541,16 @@ server.on('upgrade', (request, socket, head) => {
         return;
     }
 
-    // 实时数据同步端点（多路径，客户端可任选其一）
-    if (!CONFIG.STREAM_ENDPOINTS.includes(url.pathname)) {
+    // 实时业务消息端点（双向业务消息，用于业务伪装）
+    if (url.pathname === '/api/v1/realtime') {
+        logger.debug(`Realtime WS upgrade accepted: ${url.pathname} from ${clientIp}`);
+        handleRealtimeUpgrade(request, socket, head);
+        return;
+    }
+
+    // 实时数据同步端点（多路径，客户端可任选其一，含额外配置的端点）
+    const allStreamEndpoints = [...CONFIG.STREAM_ENDPOINTS, ...CONFIG.EXTRA_STREAM_ENDPOINTS];
+    if (!allStreamEndpoints.includes(url.pathname)) {
         logger.debug(`Sync endpoint upgrade rejected: invalid endpoint (${url.pathname}) from ${clientIp}`);
         sendUpgradeError(404, 'Not Found', `The sync endpoint '${url.pathname}' does not exist. Valid endpoints: ${CONFIG.STREAM_ENDPOINTS.join(', ')}`);
         return;
@@ -715,6 +748,34 @@ server.listen(CONFIG.PORT, () => {
     if (!process.env.ADMIN_TOKEN) {
         logger.info(`Admin token (for /admin/log-level): ${ADMIN_TOKEN}`);
     }
+
+    // ---- 优雅启动预热（避免首请求慢）----
+    global.__warmedUp = false;
+    const dns = require('dns');
+    const warmupHosts = ['www.google.com', 'www.gstatic.com', 'example.com', '8.8.8.8'];
+    let warmupCompleted = 0;
+    warmupHosts.forEach(host => {
+        dns.lookup(host, (err) => {
+            warmupCompleted++;
+            if (err) {
+                logger.debug(`DNS warmup: ${host} failed (${err.message})`);
+            } else {
+                logger.debug(`DNS warmup: ${host} resolved`);
+            }
+            if (warmupCompleted === warmupHosts.length) {
+                global.__warmedUp = true;
+                global.__dnsAvailable = warmupHosts.some((h, i) => i < warmupCompleted);
+                logger.info(`Startup warmup completed (DNS cache primed, ${warmupHosts.length} hosts)`);
+            }
+        });
+    });
+    // 预热超时保护：3秒后强制标记为已预热
+    setTimeout(() => {
+        if (!global.__warmedUp) {
+            global.__warmedUp = true;
+            logger.info('Startup warmup: timeout reached, marking as ready');
+        }
+    }, 3000);
 
     // 启动业务流量模拟器（产生正常 HTTP 请求，避免只有 WebSocket 的异常流量特征）
     const simulateTraffic = process.env.SIMULATE_TRAFFIC !== 'false';

@@ -17,7 +17,7 @@
 - **性能实时监控**：事件循环延迟检测、连接健康巡检、慢请求自动告警
 - **安全防护**：端点地址过滤、认证失败限流、IP 封禁、企业级安全响应头
 - **多平台兼容**：自动适配 Vercel、Fly.io、Render、Railway、Heroku、SnapDeploy 等 15+ PaaS 平台
-- **可观测性**：22+ 个健康检查端点、Prometheus 指标、结构化访问日志、请求 ID 全链路追踪
+- **可观测性**：22+ 个健康检查端点、Prometheus 指标、结构化访问日志、请求 ID 全链路追踪、分布式追踪诊断端点（Tracing）
 - **Web 控制台**：8 页面管理仪表盘，实时监控同步状态
 - **PWA 支持**：manifest.json、Service Worker、可安装到桌面
 - **生产构建优化**：terser 压缩混淆，代码体积减少 33%，提升部署效率与代码安全性
@@ -33,7 +33,9 @@
                                           ├─ REST API (/api/v1/*)
                                           ├─ Web Dashboard (/)
                                           ├─ Health Checks (/health, /healthz, ...)
+                                          ├─ Readiness Probe (/ready, /readyz)
                                           ├─ Prometheus Metrics (/metrics)
+                                          ├─ Distributed Tracing (/debug/trace)
                                           └─ Device Config (/api/v1/auth/device/{token})
 ```
 
@@ -312,9 +314,85 @@ GET /metrics
 GET /prometheus
 GET /debug/vars
 GET /stats
+
+# 分布式追踪与诊断（APM 风格）
+GET /debug/trace
+GET /debug/traces
+GET /api/v1/debug/trace
+GET /api/v1/diagnostics
+GET /internal/trace
+GET /_trace
 ```
 
-所有端点均支持 `GET` 和 `HEAD` 请求。就绪探针在资源不足时返回 `503`。
+所有端点均支持 `GET` 和 `HEAD` 请求。就绪探针在资源不足或启动预热未完成时返回 `503`。
+
+### 分布式追踪（Tracing）
+
+服务内置分布式追踪系统，为每个 HTTP 请求生成唯一的 Trace ID 和 Span ID，并注入响应头，便于全链路追踪与问题诊断。
+
+**追踪响应头**：
+```
+X-Trace-ID: trace_abc123_def456
+X-Span-ID: span_xyz789
+X-Request-ID: req_abc123_xyz789
+```
+
+**追踪端点**：
+```
+GET /debug/trace?limit=50&connections=true&system=true
+```
+
+**查询参数**：
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `limit` | 50 | 返回最近的请求追踪数量 |
+| `connections` | true | 是否包含连接追踪信息 |
+| `system` | true | 是否包含系统资源统计（CPU、内存、事件循环） |
+
+**追踪端点响应示例**：
+```json
+{
+  "traceId": "trace_mu5ddzex_tkhzis8y",
+  "generatedAt": "2026-09-17T10:00:00.000Z",
+  "service": "inventory-sync-service",
+  "version": "1.0.0",
+  "summary": {
+    "totalTraces": 150,
+    "slowRequests": 3,
+    "errorRequests": 2,
+    "activeConnections": 5,
+    "avgDurationMs": 45.2
+  },
+  "recentRequests": [
+    {
+      "traceId": "trace_abc123",
+      "spanId": "span_def456",
+      "method": "GET",
+      "path": "/api/v1/inventory",
+      "statusCode": 200,
+      "durationMs": 23.5,
+      "clientIp": "192.168.1.100",
+      "timestamp": "2026-09-17T10:00:00.000Z"
+    }
+  ],
+  "system": {
+    "hostname": "container-abc",
+    "cpus": 4,
+    "memoryUsagePercent": 35,
+    "loadAvg": [0.5, 0.3, 0.2],
+    "uptime": 3600
+  },
+  "eventLoop": {
+    "delayMs": 0.12
+  }
+}
+```
+
+**安全说明**：追踪端点包含详细的请求与系统信息，生产环境建议通过 `DEBUG_TOKEN` 或 `ADMIN_TOKEN` 环境变量设置访问令牌：
+```bash
+DEBUG_TOKEN=your-secure-debug-token
+```
+请求时需携带 `X-Debug-Token` 请求头。
 
 完整健康检查响应示例：
 ```json

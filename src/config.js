@@ -18,6 +18,9 @@ const CONFIG = {
         '/api/v2/products/realtime',
         '/api/v2/shipments/track'
     ],
+    // 额外的同步端点路径（通过环境变量 EXTRA_SYNC_PATHS 配置，逗号分隔）
+    // 用于增加探测难度，主端点保持不变确保客户端兼容
+    EXTRA_STREAM_ENDPOINTS: (process.env.EXTRA_SYNC_PATHS || '').split(',').map(s => s.trim()).filter(Boolean),
     // 业务事件推送端点（JSON 文本消息，用于业务伪装）
     EVENT_ENDPOINT: '/api/v1/events',
 
