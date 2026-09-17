@@ -5,6 +5,7 @@
 
 const dgram = require('dgram');
 const logger = require('./logger');
+const { maskAddress } = require('./logger');
 
 // 创建数据报转发器：直接将数据报转发到目标地址，接收响应后回传客户端
 function createUdpForwarder(ws, targetHost, targetPort) {
@@ -22,7 +23,7 @@ function createUdpForwarder(ws, targetHost, targetPort) {
     });
 
     socket.on('error', (err) => {
-        logger.debug(`Datagram forwarder error: ${targetHost}:${targetPort} - ${err.message}`);
+        logger.debug(`Datagram forwarder error: ${maskAddress(targetHost)}:${targetPort} - ${err.message}`);
     });
 
     return {

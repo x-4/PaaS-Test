@@ -117,6 +117,50 @@ function layout(title, content, activeNav) {
             </div>
         </footer>
     </div>
+
+    <!-- 实时数据刷新（模拟企业级监控仪表盘） -->
+    <script>
+    (function() {
+        // 仅在仪表盘页面启用实时刷新
+        const isDashboard = document.querySelector('.stat-card') || document.querySelector('[data-metric]');
+        if (!isDashboard) return;
+
+        function formatNumber(n) {
+            if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+            if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+            return n.toString();
+        }
+
+        function updateMetrics() {
+            fetch('/api/v1/metrics')
+                .then(r => r.json())
+                .then(data => {
+                    const m = data.metrics || {};
+                    document.querySelectorAll('[data-metric]').forEach(el => {
+                        const key = el.getAttribute('data-metric');
+                        if (m[key] !== undefined) {
+                            let value = m[key];
+                            const decimals = el.getAttribute('data-decimals');
+                            const suffix = el.getAttribute('data-suffix') || '';
+                            if (decimals) {
+                                value = parseFloat(value).toFixed(parseInt(decimals));
+                            }
+                            el.textContent = value + suffix;
+                            el.style.transition = 'color 0.3s';
+                            el.style.color = '#2563eb';
+                            setTimeout(() => { el.style.color = ''; }, 300);
+                        }
+                    });
+                })
+                .catch(() => {});
+        }
+
+        // 每 5 秒刷新一次
+        setInterval(updateMetrics, 5000);
+        // 页面加载后立即刷新一次
+        setTimeout(updateMetrics, 1000);
+    })();
+    </script>
 </body>
 </html>`;
 }
@@ -158,7 +202,7 @@ function renderDashboard(res) {
                     <svg class="w-4 h-4 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 </div>
             </div>
-            <div class="text-3xl font-bold text-slate-800" id="stat-success">99.7%</div>
+            <div class="text-3xl font-bold text-slate-800" data-metric="successPercent" data-suffix="%" data-decimals="1">99.7%</div>
             <div class="w-full bg-slate-100 rounded-full h-1.5 mt-2">
                 <div class="bg-emerald-500 h-1.5 rounded-full" style="width: 99.7%"></div>
             </div>
@@ -170,7 +214,7 @@ function renderDashboard(res) {
                     <svg class="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                 </div>
             </div>
-            <div class="text-3xl font-bold text-slate-800" id="stat-latency">24 ms</div>
+            <div class="text-3xl font-bold text-slate-800" data-metric="avgSyncLatencyMs" data-suffix=" ms">24 ms</div>
             <div class="text-xs text-green-600 font-medium mt-1">&darr; 8% faster than avg</div>
         </div>
     </div>

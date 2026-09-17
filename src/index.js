@@ -9,10 +9,20 @@ const { handlePageRequest } = require('./pages');
 const { generateDeviceProfile } = require('./device');
 const { handleApiRequest } = require('./api');
 const { handleStaticRequest, sendNotFound } = require('./static');
-const { createTransportServer, getActiveConnectionCount, getConnectionStats, shutdownTransport } = require('./transport');
+const { createConnectionServer, getActiveConnectionCount, getConnectionStats, getCircuitBreakerStats, cleanupIdleConnections, shutdownConnections } = require('./connection');
+const { createEventStreamServer } = require('./event-stream');
+const { handleDocsRequest } = require('./swagger');
+const {
+    setupProcessErrorHandlers,
+    setupMemoryMonitor,
+    setupEventLoopMonitor,
+    setupConnectionHealthCheck,
+    configureHttpServerTimeouts,
+    getResilienceStats
+} = require('./resilience');
 const { detectPlatform, getPlatformConfig } = require('./platform');
 const { destroyTenantKey } = require('./auth');
-const { startTrafficSimulator } = require('./traffic-simulator');
+const { startTrafficSimulator, startScheduledJobSimulator } = require('./traffic-simulator');
 
 // ---- 启动前配置校验 ----
 try {
@@ -29,13 +39,21 @@ const platformConfig = getPlatformConfig();
 // ---- 健康检查端点定义（覆盖主流 PaaS / K8s / 监控系统） ----
 const LIVENESS_ENDPOINTS = ['/livez', '/live', '/ping'];
 const READINESS_ENDPOINTS = ['/readyz', '/ready'];
-const FULL_HEALTH_ENDPOINTS = ['/health', '/healthz', '/status', '/api/status', '/api/health'];
+const FULL_HEALTH_ENDPOINTS = [
+    '/health', '/healthz', '/status', '/api/status', '/api/health',
+    '/healthcheck', '/api/v1/health', '/api/v1/status',
+    '/internal/health', '/_status', '/_health'
+];
 const INFO_ENDPOINTS = ['/version', '/info'];
-const METRICS_ENDPOINTS = ['/metrics', '/prometheus'];
+const METRICS_ENDPOINTS = ['/metrics', '/prometheus', '/debug/vars', '/stats'];
 const ALL_HEALTH_ENDPOINTS = [...LIVENESS_ENDPOINTS, ...READINESS_ENDPOINTS, ...FULL_HEALTH_ENDPOINTS, ...INFO_ENDPOINTS, ...METRICS_ENDPOINTS];
 
 const SERVICE_VERSION = '1.0.0';
 const SERVICE_NAME = 'inventory-sync-service';
+
+// 管理员 Token（用于 /admin/log-level 等管理端点认证）
+// 可通过环境变量 ADMIN_TOKEN 设置，未设置时自动生成并在启动日志中输出
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || require('crypto').randomBytes(24).toString('hex');
 
 function formatUptime(seconds) {
     const d = Math.floor(seconds / 86400);
@@ -178,18 +196,23 @@ function handleHealthCheck(req, res) {
 
 // ---- HTTP 服务 ----
 const server = http.createServer((req, res) => {
-    // ---- nginx 格式访问日志（模拟真实 Web 服务器访问日志）----
+    // ---- 请求级上下文：请求 ID + 计时 + 客户端信息 ----
+    const requestId = logger.generateRequestId();
     const reqStartTime = Date.now();
     const reqClientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || '-';
     const reqUserAgent = req.headers['user-agent'] || '-';
     const reqReferer = req.headers['referer'] || '-';
 
+    // 在响应头中注入请求 ID（便于全链路追踪）
+    res.setHeader('X-Request-ID', requestId);
+
     res.on('finish', () => {
         const contentLength = res.getHeader('Content-Length') || 0;
-        const timeLocal = new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' +0000');
-        const requestLine = `${req.method} ${req.url} HTTP/${req.httpVersion}`;
-        // nginx combined log format
-        console.log(`${reqClientIp} - - [${timeLocal}] "${requestLine}" ${res.statusCode} ${contentLength} "${reqReferer}" "${reqUserAgent}"`);
+        const durationMs = Date.now() - reqStartTime;
+        // 结构化访问日志（nginx combined 格式 + 请求 ID + 响应时间）
+        logger.logAccess(requestId, req.method, req.url, res.statusCode, durationMs, contentLength, reqUserAgent, reqReferer, reqClientIp);
+        // 慢请求记录（超过 1 秒自动告警）
+        logger.logSlowRequest(requestId, req.method, req.url, durationMs, 1000);
     });
 
     // ---- 企业级安全响应头（模拟真实生产环境）----
@@ -209,9 +232,51 @@ const server = http.createServer((req, res) => {
     // 统一健康检查（覆盖所有常见 PaaS / K8s / 监控系统端点）
     if (handleHealthCheck(req, res)) return;
 
+    // ---- 管理端点：日志级别动态调整（需要管理员 Token）----
+    if (path === '/admin/log-level' || path === '/api/v1/admin/log-level') {
+        const adminToken = req.headers['x-admin-token'];
+        if (adminToken !== ADMIN_TOKEN) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Unauthorized', message: 'Invalid admin token' }));
+            return;
+        }
+        if (req.method === 'GET') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ level: logger.getLevel(), available: ['error', 'warn', 'info', 'debug', 'trace'] }));
+            return;
+        }
+        if (req.method === 'POST' || req.method === 'PUT') {
+            let body = '';
+            req.on('data', chunk => body += chunk);
+            req.on('end', () => {
+                try {
+                    const { level } = JSON.parse(body || '{}');
+                    if (logger.setLevel(level)) {
+                        res.writeHead(200, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: true, level: logger.getLevel() }));
+                    } else {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: 'Invalid level', available: ['error', 'warn', 'info', 'debug', 'trace'] }));
+                    }
+                } catch (e) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Invalid JSON' }));
+                }
+            });
+            return;
+        }
+        res.writeHead(405); res.end();
+        return;
+    }
+
     // 静态资源（favicon / robots.txt / sitemap.xml / manifest.json 等）
     const staticResult = handleStaticRequest(req, res);
     if (staticResult === true) return;
+
+    // API 文档（Swagger UI 风格）
+    if (path.startsWith('/api/docs')) {
+        if (handleDocsRequest(req, res, path)) return;
+    }
 
     // 业务 API 端点（添加随机处理延迟，模拟真实业务耗时）
     if (path.startsWith('/api/') && !path.startsWith('/api/v1/auth/device/')) {
@@ -255,19 +320,29 @@ server.on('connection', (socket) => {
     socket.setNoDelay(true);
     socket.setKeepAlive(true, 60000);
 });
-server.keepAliveTimeout = 120000;
-server.requestTimeout = 30000;
-server.headersTimeout = 30000;
+
+// 配置 HTTP 服务器超时（请求超时、Keep-Alive 超时、请求头超时等）
+configureHttpServerTimeouts(server);
 
 // ---- WebSocket 升级处理 ----
-const transportServer = createTransportServer();
+const connectionServer = createConnectionServer();
+const eventStreamServer = createEventStreamServer();
 
 server.on('upgrade', (request, socket, head) => {
     const url = new URL(request.url, `http://${request.headers.host}`);
     const clientIp = request.headers['x-forwarded-for']?.split(',')[0]?.trim() || request.socket.remoteAddress;
 
-    // 仅允许指定端点升级
-    if (url.pathname !== CONFIG.SYNC_ENDPOINT) {
+    // 业务事件推送端点（JSON 文本消息，用于业务伪装）
+    if (url.pathname === CONFIG.EVENT_ENDPOINT) {
+        logger.debug(`Event stream upgrade accepted: ${url.pathname} from ${clientIp}`);
+        eventStreamServer.handleUpgrade(request, socket, head, (ws) => {
+            eventStreamServer.emit('connection', ws, request);
+        });
+        return;
+    }
+
+    // 实时数据同步端点（多路径，客户端可任选其一）
+    if (!CONFIG.STREAM_ENDPOINTS.includes(url.pathname)) {
         logger.debug(`WS upgrade rejected: path mismatch (${url.pathname}) from ${clientIp}`);
         socket.destroy();
         return;
@@ -304,23 +379,15 @@ server.on('upgrade', (request, socket, head) => {
 
     logger.debug(`WS upgrade accepted: ${url.pathname} from ${clientIp} origin=${request.headers.origin || '(none)'}`);
 
-    transportServer.handleUpgrade(request, socket, head, (ws) => {
-        transportServer.emit('connection', ws, request);
+    connectionServer.handleUpgrade(request, socket, head, (ws) => {
+        connectionServer.emit('connection', ws, request);
     });
 });
-
-// ---- 内存监控 ----
-setInterval(() => {
-    const mem = process.memoryUsage();
-    const heapMB = Math.round(mem.heapUsed / 1024 / 1024);
-    if (heapMB > CONFIG.MEMORY_LIMIT_MB) {
-        logger.warn(`Memory usage: ${heapMB}MB / ${CONFIG.MEMORY_LIMIT_MB}MB`);
-    }
-}, 30000);
 
 // ---- 优雅关闭 ----
 let isShuttingDown = false;
 let trafficSimulator = null;
+let scheduledJobSimulator = null;
 
 function gracefulShutdown(signal) {
     if (isShuttingDown) return;
@@ -333,11 +400,21 @@ function gracefulShutdown(signal) {
         trafficSimulator = null;
     }
 
+    if (scheduledJobSimulator) {
+        scheduledJobSimulator.stop();
+        scheduledJobSimulator = null;
+    }
+
     server.close(() => {
         logger.info('HTTP server closed');
     });
 
-    shutdownTransport();
+    shutdownConnections();
+
+    // 关闭业务事件推送流
+    if (eventStreamServer) {
+        eventStreamServer.close();
+    }
 
     // 安全销毁租户密钥
     destroyTenantKey();
@@ -351,27 +428,45 @@ function gracefulShutdown(signal) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-// ---- 进程级错误处理 ----
-process.on('uncaughtException', (err) => {
-    logger.error('Uncaught exception:', err.message);
-    gracefulShutdown('uncaughtException');
-    setTimeout(() => process.exit(1), 2000);
-});
-
-process.on('unhandledRejection', (reason) => {
-    logger.error('Unhandled rejection:', reason);
-});
+// ---- 进程级错误处理（分级处理，非致命异常不崩溃）----
+setupProcessErrorHandlers(gracefulShutdown);
 
 // ---- 启动 ----
 server.listen(CONFIG.PORT, () => {
+    // 输出完整的启动环境信息（企业级服务标准）
+    logger.logStartupInfo({
+        serviceName: SERVICE_NAME,
+        version: SERVICE_VERSION,
+        port: CONFIG.PORT,
+        platform: platform,
+        maxConnections: platformConfig.maxConnections,
+        idleTimeout: platformConfig.idleTimeout,
+        memoryLimitMB: CONFIG.MEMORY_LIMIT_MB,
+        tenantId: CONFIG.ENTERPRISE_TOKEN
+    });
+
     logger.info(`Inventory Sync Service ONLINE | Port: ${CONFIG.PORT}`);
     logger.info(`Platform: ${platform} | Heartbeat: ${platformConfig.pingInterval}ms`);
     logger.info(`Max connections: ${platformConfig.maxConnections} | Idle timeout: ${platformConfig.idleTimeout}ms`);
     if (platformConfig.note) {
         logger.info(`Platform note: ${platformConfig.note}`);
     }
+    // 仅在自动生成时输出管理员 Token（环境变量设置的不输出，避免泄露）
+    if (!process.env.ADMIN_TOKEN) {
+        logger.info(`Admin token (for /admin/log-level): ${ADMIN_TOKEN}`);
+    }
 
     // 启动业务流量模拟器（产生正常 HTTP 请求，避免只有 WebSocket 的异常流量特征）
     const simulateTraffic = process.env.SIMULATE_TRAFFIC !== 'false';
     trafficSimulator = startTrafficSimulator(CONFIG.PORT, simulateTraffic);
+
+    // 启动定时任务模拟器（产生同步任务日志，模拟真实业务运行）
+    scheduledJobSimulator = startScheduledJobSimulator();
+
+    // ---- 启动稳定性监控模块 ----
+    setupMemoryMonitor(getActiveConnectionCount, cleanupIdleConnections);
+    setupEventLoopMonitor();
+    setupConnectionHealthCheck(getActiveConnectionCount, getConnectionStats);
+
+    logger.info('Resilience modules: all started (memory/event-loop/connection-health)');
 });

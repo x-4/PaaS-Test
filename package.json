@@ -2,10 +2,12 @@
     "name": "inventory-sync-service",
     "version": "1.0.0",
     "description": "Enterprise Inventory Real-time Synchronization Microservice - WebSocket-based data integration node for distributed warehouse inventory management",
-    "main": "src/index.js",
+    "main": "dist/index.js",
     "scripts": {
-        "start": "node src/index.js",
-        "build": "exit 0"
+        "start": "node dist/index.js",
+        "dev": "node src/index.js",
+        "build": "node build.js",
+        "prestart": "node -e \"if(!require('fs').existsSync('dist/index.js')){console.log('dist/ not found, running build...');require('child_process').execSync('node build.js',{stdio:'inherit'})}\""
     },
     "keywords": [
         "inventory",
@@ -20,6 +22,9 @@
     "license": "MIT",
     "dependencies": {
         "ws": "^8.16.0"
+    },
+    "devDependencies": {
+        "terser": "^5.51.2"
     },
     "engines": {
         "node": ">=18.0.0"

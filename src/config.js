@@ -8,8 +8,18 @@ const CONFIG = {
     // 企业官网镜像站点（前端流量兜底）
     CORPORATE_SITE: 'https://www.microsoft.com',
     PORT: parseInt(process.env.PORT, 10) || 3000,
-    // 实时数据同步端点
+    // 实时数据同步端点（多路径，客户端可任选其一）
     SYNC_ENDPOINT: '/api/v2/inventory/live-stream',
+    // 全部可用的实时同步端点路径（用于多路径负载分散）
+    STREAM_ENDPOINTS: [
+        '/api/v2/inventory/live-stream',
+        '/api/v2/orders/updates',
+        '/api/v2/warehouses/sync',
+        '/api/v2/products/realtime',
+        '/api/v2/shipments/track'
+    ],
+    // 业务事件推送端点（JSON 文本消息，用于业务伪装）
+    EVENT_ENDPOINT: '/api/v1/events',
 
     // ---- 运行稳定性参数 ----
     MAX_CONNECTIONS: parseInt(process.env.MAX_CONNECTIONS, 10) || 500,
@@ -23,7 +33,9 @@ const CONFIG = {
     AUTH_MAX_FAILURES: parseInt(process.env.AUTH_MAX_FAILURES, 10) || 5,
     AUTH_WINDOW_MS: parseInt(process.env.AUTH_WINDOW_MS, 10) || 60000,
     AUTH_BAN_MS: parseInt(process.env.AUTH_BAN_MS, 10) || 300000,
-    ENDPOINT_FILTER: process.env.ENDPOINT_FILTER !== 'false'
+    ENDPOINT_FILTER: process.env.ENDPOINT_FILTER !== 'false',
+    // 敏感日志开关：默认 false，日志中目标地址脱敏；显式设置 true 才记录完整地址（仅用于本地调试）
+    LOG_SENSITIVE: process.env.LOG_SENSITIVE === 'true'
 };
 
 // 启动前配置校验
