@@ -196,7 +196,7 @@ docker run -d \
 
 ### Vercel
 
-项目已包含 `vercel.json`，直接导入仓库即可。Vercel 会自动运行 `npm run build` 并启动服务。
+直接导入仓库即可。Vercel 会自动检测 Node.js 项目，运行 `npm run build` 并启动服务。
 
 ```bash
 npm i -g vercel
