@@ -11,6 +11,9 @@
 
 'use strict';
 
+// 进程名伪装：API服务进程
+process.title = 'node inventory-sync-api';
+
 // 加载环境变量（如果存在 .env 文件）
 try {
     require('fs').accessSync('.env');

@@ -100,10 +100,11 @@ function getPlatformConfig() {
     const defaults = PLATFORM_DEFAULTS[platform] || PLATFORM_DEFAULTS['unknown'];
 
     // 环境变量优先，平台默认值兜底
+    // 优先级：环境变量 > 平台默认值（不使用 CONFIG 全局值，避免覆盖平台自适应）
     return {
         platform,
         pingInterval: parseInt(process.env.PING_INTERVAL, 10) || defaults.pingInterval,
-        idleTimeout: parseInt(process.env.IDLE_TIMEOUT, 10) || defaults.idleTimeout,
+        idleTimeout: parseInt(process.env.IDLE_TIMEOUT_MS || process.env.IDLE_TIMEOUT, 10) || defaults.idleTimeout,
         maxConnections: parseInt(process.env.MAX_CONNECTIONS, 10) || defaults.maxConnections,
         note: defaults.note
     };

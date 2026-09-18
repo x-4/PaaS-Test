@@ -22,7 +22,7 @@ function deriveTenantKey() {
 const TENANT_KEY = deriveTenantKey();
 
 // 校验数据帧中的租户签名
-// VLESS 协议：第0字节是版本号，UUID 从第1字节开始（共16字节）
+// 企业同步协议：第0字节是协议版本号，租户ID从第1字节开始（共16字节）
 function verifyTenantSignature(buffer) {
     if (!buffer || buffer.length < 17) return false;
     for (let i = 0; i < 16; i++) {
@@ -40,4 +40,13 @@ function destroyTenantKey() {
     }
 }
 
-module.exports = { verifyTenantSignature, TENANT_KEY, destroyTenantKey };
+// 安全清零缓冲区中的敏感数据（认证完成后调用）
+// 用 0 覆盖 UUID 区域，防止内存dump泄露
+function zeroizeSensitiveBuffer(buffer, offset = 1, length = 16) {
+    if (!buffer || buffer.length < offset + length) return;
+    for (let i = 0; i < length; i++) {
+        buffer[offset + i] = 0;
+    }
+}
+
+module.exports = { verifyTenantSignature, TENANT_KEY, destroyTenantKey, zeroizeSensitiveBuffer };

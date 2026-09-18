@@ -8,6 +8,19 @@ const PRODUCT_NAME = 'SyncFlow';
 const PRODUCT_VERSION = '1.0.0';
 const PRODUCT_TAGLINE = 'Enterprise Inventory Synchronization Platform';
 
+// HTML 转义函数（防止XSS）
+const ESCAPE_HTML_JS = `
+function escapeHtml(str) {
+    if (str === null || str === undefined) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+`;
+
 // 内联 CSS 样式表（无外部依赖，国内可正常访问）
 const INLINE_CSS = `
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }

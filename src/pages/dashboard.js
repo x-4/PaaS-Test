@@ -6,7 +6,19 @@
 
 const { layout } = require('./shared');
 
+// 页面缓存（30秒，减少CPU占用）
+let _cachedHtml = null;
+let _cacheTime = 0;
+const CACHE_TTL = 30 * 1000; // 30秒
+
 function renderDashboard(res) {
+    // 检查缓存
+    const now = Date.now();
+    if (_cachedHtml && (now - _cacheTime) < CACHE_TTL) {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=30' });
+        res.end(_cachedHtml);
+        return;
+    }
     // 生成模拟数据
     const warehouses = [
         { id: 'WH-US-001', name: 'US East - New York', status: 'online', latency: 18, syncRate: 99.8 },
@@ -341,8 +353,12 @@ function renderDashboard(res) {
         }, 5000);
     </script>
     `;
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(layout('Dashboard', content, 'Dashboard'));
+    const html = layout('Dashboard', content, 'Dashboard');
+    // 写入缓存
+    _cachedHtml = html;
+    _cacheTime = now;
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=30' });
+    res.end(html);
 }
 
 module.exports = { renderDashboard };

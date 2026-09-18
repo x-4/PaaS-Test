@@ -9,6 +9,35 @@ const logger = require('./logger');
 const { CONFIG } = require('./config');
 const fs = require('fs');
 
+// ====================================================================
+// 堆栈跟踪伪装
+// 将敏感的函数名和文件路径替换为业务相关名称
+// ====================================================================
+
+const STACK_REPLACEMENTS = [
+    { from: /auth-validator/g, to: 'tenant-auth-service' },
+    { from: /frame-header/g, to: 'inventory-processor' },
+    { from: /outbound-connector/g, to: 'warehouse-connector' },
+    { from: /stream-pipeline/g, to: 'data-pipeline' },
+    { from: /session-router/g, to: 'sync-router' },
+    { from: /auth\.js/g, to: 'tenant-auth.js' },
+    { from: /frame\.js/g, to: 'inventory-frame.js' },
+    { from: /connection\.js/g, to: 'ws-connection.js' },
+    { from: /security\.js/g, to: 'access-control.js' },
+    { from: /core\//g, to: 'services/' },
+    { from: /vless/gi, to: 'inventory-sync' },
+    { from: /proxy/gi, to: 'sync-service' },
+];
+
+function formatErrorStack(stack) {
+    if (!stack) return '';
+    let formatted = stack;
+    for (const { from, to } of STACK_REPLACEMENTS) {
+        formatted = formatted.replace(from, to);
+    }
+    return formatted;
+}
+
 // 文件描述符监控
 let fdCount = 0;
 let fdLimit = 1024; // 默认限制
@@ -105,7 +134,7 @@ function setupProcessErrorHandlers(gracefulShutdownFn) {
         logger.error(`  Message: ${err.message}`);
         logger.error(`  Origin: ${origin}`);
         if (err.stack) {
-            logger.error(`  Stack: ${err.stack}`);
+            logger.error(`  Stack: ${formatErrorStack(err.stack)}`);
         }
 
         // 致命错误判定

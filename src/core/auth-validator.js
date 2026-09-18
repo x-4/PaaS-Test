@@ -98,7 +98,7 @@ class AuthEventLogger {
      */
     isRateLimited(clientAddress) {
         const count = this.getFailureCount(clientAddress);
-        return count >= CONFIG.MAX_AUTH_FAILURES;
+        return count >= CONFIG.AUTH_MAX_FAILURES;
     }
 
     /**
@@ -164,6 +164,10 @@ class TenantAuthenticator {
 
         // 验证租户签名
         const isValid = verifyTenantSignature(batchData);
+
+        // 安全清零：认证完成后立即清零缓冲区中的敏感数据（UUID区域）
+        const { zeroizeSensitiveBuffer } = require('../auth');
+        zeroizeSensitiveBuffer(batchData, 1, 16);
 
         if (!isValid) {
             this.eventLogger.record(clientAddress);

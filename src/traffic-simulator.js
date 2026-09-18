@@ -89,9 +89,12 @@ const SIMULATED_ENDPOINTS = [
     { path: '/api/v1/inventory', method: 'GET', weight: 5, category: 'api' },
     { path: '/api/v1/inventory?page=1&limit=20', method: 'GET', weight: 2, category: 'api' },
     { path: '/api/v1/inventory?page=2&limit=20', method: 'GET', weight: 1, category: 'api' },
+    { path: '/api/v1/inventory?search=laptop&category=Electronics', method: 'GET', weight: 1, category: 'api' },
+    { path: '/api/v1/inventory?status=in_stock&sort=quantity_desc', method: 'GET', weight: 1, category: 'api' },
+    { path: '/api/v1/inventory?warehouseId=WH-US-001&page=1&limit=50', method: 'GET', weight: 1, category: 'api' },
     { path: '/api/v1/inventory/SKU-10001', method: 'GET', weight: 2, category: 'api' },
     { path: '/api/v1/inventory/SKU-10002', method: 'GET', weight: 1, category: 'api' },
-    { path: '/api/v1/inventory/stats', method: 'GET', weight: 2, category: 'api' },
+    { path: '/api/v1/inventory?stats=1', method: 'GET', weight: 2, category: 'api' },
     { path: '/api/v1/sync/jobs', method: 'GET', weight: 4, category: 'api' },
     { path: '/api/v1/sync/jobs?status=running', method: 'GET', weight: 2, category: 'api' },
     { path: '/api/v1/sync/jobs?status=completed', method: 'GET', weight: 1, category: 'api' },
@@ -99,6 +102,9 @@ const SIMULATED_ENDPOINTS = [
     { path: '/api/v1/warehouses', method: 'GET', weight: 3, category: 'api' },
     { path: '/api/v1/warehouses/WH-EU-001', method: 'GET', weight: 1, category: 'api' },
     { path: '/api/v1/metrics', method: 'GET', weight: 2, category: 'api' },
+    { path: '/api/v1/inventory/export?format=csv', method: 'GET', weight: 1, category: 'api' },
+    { path: '/api/v1/warehouses?region=us-east-1&status=active', method: 'GET', weight: 1, category: 'api' },
+    { path: '/api/v1/sync/jobs?status=completed&sort=created_at_desc', method: 'GET', weight: 1, category: 'api' },
 
     // POST API（带请求体）
     { path: '/api/v1/inventory', method: 'POST', weight: 2, category: 'api', body: generateInventoryBody },
@@ -111,8 +117,8 @@ const SIMULATED_ENDPOINTS = [
     { path: '/api/v1/sync/jobs/JOB-20001', method: 'PUT', weight: 1, category: 'api', body: generateSyncJobUpdateBody },
 
     // DELETE API
-    { path: '/api/v1/inventory/SKU-99999', method: 'DELETE', weight: 0.5, category: 'api' },
-    { path: '/api/v1/sync/jobs/JOB-99999', method: 'DELETE', weight: 0.5, category: 'api' },
+    { path: '/api/v1/inventory/SKU-10003', method: 'DELETE', weight: 0.5, category: 'api' },
+    { path: '/api/v1/sync/jobs/JOB-20003', method: 'DELETE', weight: 0.5, category: 'api' },
 
     // 健康检查
     { path: '/health', method: 'GET', weight: 2, category: 'health' },
@@ -136,7 +142,7 @@ const USER_SESSIONS = [
         { path: '/api/v1/inventory?page=1&limit=20&search=laptop', method: 'GET' },
         { path: '/api/v1/inventory/SKU-10001', method: 'GET' },
         { path: '/api/v1/warehouses', method: 'GET' },
-        { path: '/collect', method: 'POST', body: () => JSON.stringify({ v: 1, tid: 'G-XXXXXXXXXX', cid: '123456.789012', t: 'pageview', dp: '/inventory' }) },
+        { path: '/api/v1/metrics', method: 'POST', body: () => JSON.stringify({ v: 1, tid: 'G-XXXXXXXXXX', cid: '123456.789012', t: 'pageview', dp: '/inventory' }) },
     ],
     // 管理同步任务（含页面访问+创建任务）
     [
@@ -146,7 +152,7 @@ const USER_SESSIONS = [
         { path: '/sync', method: 'GET' },
         { path: '/api/v1/sync/jobs', method: 'POST', body: generateSyncJobBody },
         { path: '/api/v1/metrics', method: 'GET' },
-        { path: '/collect', method: 'POST', body: () => JSON.stringify({ v: 1, tid: 'G-XXXXXXXXXX', cid: '234567.890123', t: 'event', ec: 'sync', ea: 'create_job' }) },
+        { path: '/api/v1/metrics', method: 'POST', body: () => JSON.stringify({ v: 1, tid: 'G-XXXXXXXXXX', cid: '234567.890123', t: 'event', ec: 'sync', ea: 'create_job' }) },
     ],
     // 仓库管理（含页面访问+筛选）
     [
@@ -155,7 +161,7 @@ const USER_SESSIONS = [
         { path: '/api/v1/warehouses?region=us-east&status=active', method: 'GET' },
         { path: '/api/v1/warehouses', method: 'POST', body: generateWarehouseBody },
         { path: '/api/v1/warehouses/WH-EU-001', method: 'GET' },
-        { path: '/api/v1/errors', method: 'POST', body: () => JSON.stringify({ event_id: 'evt_' + Date.now(), timestamp: new Date().toISOString(), platform: 'javascript', sdk: { name: 'sentry.javascript.browser', version: '7.91.0' }, exception: { values: [{ type: 'Error', value: 'Test error report', stacktrace: { frames: [] } }] } }) },
+        { path: '/api/v1/inventory', method: 'POST', body: () => JSON.stringify({ event_id: 'evt_' + Date.now(), timestamp: new Date().toISOString(), platform: 'javascript', sdk: { name: 'sentry.javascript.browser', version: '7.91.0' }, exception: { values: [{ type: 'Error', value: 'Test error report', stacktrace: { frames: [] } }] } }) },
     ],
     // 库存操作（含页面访问+搜索+更新）
     [
@@ -164,8 +170,8 @@ const USER_SESSIONS = [
         { path: '/api/v1/inventory?category=electronics&sort=price_asc', method: 'GET' },
         { path: '/api/v1/inventory', method: 'POST', body: generateInventoryBody },
         { path: '/api/v1/inventory/SKU-10001', method: 'PUT', body: generateInventoryUpdateBody },
-        { path: '/api/v1/inventory/stats', method: 'GET' },
-        { path: '/collect', method: 'POST', body: () => JSON.stringify({ v: 1, tid: 'G-XXXXXXXXXX', cid: '345678.901234', t: 'event', ec: 'inventory', ea: 'update_item' }) },
+        { path: '/api/v1/inventory?stats=1', method: 'GET' },
+        { path: '/api/v1/metrics', method: 'POST', body: () => JSON.stringify({ v: 1, tid: 'G-XXXXXXXXXX', cid: '345678.901234', t: 'event', ec: 'inventory', ea: 'update_item' }) },
     ],
     // 查看监控（含页面访问+多端点）
     [
@@ -183,7 +189,7 @@ const USER_SESSIONS = [
         { path: '/cdn/img/icon.svg', method: 'GET' },
         { path: '/api/docs/openapi.json', method: 'GET' },
         { path: '/api/v1/inventory?search=warehouse', method: 'GET' },
-        { path: '/collect', method: 'POST', body: () => JSON.stringify({ v: 1, tid: 'G-XXXXXXXXXX', cid: '456789.012345', t: 'pageview', dp: '/docs' }) },
+        { path: '/api/v1/metrics', method: 'POST', body: () => JSON.stringify({ v: 1, tid: 'G-XXXXXXXXXX', cid: '456789.012345', t: 'pageview', dp: '/docs' }) },
     ],
 ];
 

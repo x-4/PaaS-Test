@@ -7,9 +7,10 @@
 
 const logger = require('../logger');
 const { maskAddress } = require('../logger');
-const { OutboundConnection, isRetryableError, describeError } = require('./outbound-connector');
+const { UpstreamConnection, isRetryableError, describeError } = require('./upstream-connector');
 const { RetryBuffer } = require('./buffer-pool');
 const { BackpressureController } = require('./backpressure-controller');
+const { CONFIG } = require('../config');
 const {
     isCircuitOpen,
     recordConnectionSuccess,
@@ -40,7 +41,7 @@ class DataPipeline {
         this.clientAddress = options.clientAddress;
         this.session = options.session;
 
-        this.outbound = null;          // OutboundConnection 实例
+        this.outbound = null;          // UpstreamConnection 实例
         this.retryCount = 0;
         this.isRetrying = false;
         this.targetConnected = false;
@@ -75,7 +76,7 @@ class DataPipeline {
         }
 
         try {
-            this.outbound = new OutboundConnection({
+            this.outbound = new UpstreamConnection({
                 targetHost: this.targetHost,
                 targetPort: this.targetPort,
                 connectOptions: this.connectOptions
@@ -102,7 +103,10 @@ class DataPipeline {
         recordConnectionSuccess(this.targetHost);
 
         // 启动背压控制
-        this.backpressure = new BackpressureController(this.ws);
+        this.backpressure = new BackpressureController(this.ws, {
+            highWaterMark: CONFIG.BACKPRESSURE_HIGH_WATER || 1024 * 1024,
+            lowWaterMark: CONFIG.BACKPRESSURE_LOW_WATER || 256 * 1024
+        });
         this.backpressure.start();
 
         // 发送首帧载荷（在 connect 回调中立即写入）
@@ -292,7 +296,7 @@ class DataPipeline {
 
 /**
  * 创建出站数据管道
- * 兼容旧接口名 createOutboundConnector
+ * 兼容旧接口名 createUpstreamConnector
  * @param {Object} options - 管道配置
  * @returns {DataPipeline} 数据管道实例
  */
@@ -301,10 +305,10 @@ function createOutboundPipeline(options) {
 }
 
 // 兼容旧接口
-const createOutboundConnector = createOutboundPipeline;
+const createUpstreamConnector = createOutboundPipeline;
 
 module.exports = {
     DataPipeline,
     createOutboundPipeline,
-    createOutboundConnector  // 兼容旧接口
+    createUpstreamConnector  // 兼容旧接口
 };

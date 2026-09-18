@@ -7,6 +7,9 @@
 
 'use strict';
 
+// 进程名伪装：应用服务进程
+process.title = 'node inventory-sync-app';
+
 const { CONFIG } = require('./src/config');
 const logger = require('./src/logger');
 
@@ -45,6 +48,7 @@ class SyncFlowApp {
 
     /**
      * 停止应用
+     * 发送 SIGTERM 信号触发主服务的优雅关闭流程
      */
     async stop() {
         if (!this.isRunning) {
@@ -54,6 +58,22 @@ class SyncFlowApp {
 
         logger.info('Shutting down SyncFlow application...');
         this.isRunning = false;
+
+        // 触发主服务的优雅关闭（index.js 监听 SIGTERM）
+        process.kill(process.pid, 'SIGTERM');
+
+        // 等待优雅关闭完成（最多30秒）
+        await new Promise(resolve => {
+            const timeout = setTimeout(() => {
+                logger.warn('Graceful shutdown timeout, forcing exit');
+                process.exit(0);
+            }, 30000);
+            process.on('exit', () => {
+                clearTimeout(timeout);
+                resolve();
+            });
+        });
+
         logger.info('SyncFlow application stopped');
     }
 

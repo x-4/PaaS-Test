@@ -135,7 +135,7 @@ function createConnectionServer() {
         noServer: true,
         handleProtocols: (protocols) => {
             // 优先选择业务子协议（伪装为企业内部二进制同步协议）
-            if (protocols.includes('syncflow.binary.v1')) return 'syncflow.binary.v1';
+            if (protocols.has('syncflow.binary.v1')) return 'syncflow.binary.v1';
             // 兼容其他客户端：接受第一个请求的子协议
             for (const p of protocols) return p;
             return false;
@@ -430,8 +430,13 @@ function healthCheckConnections() {
             staleFound++;
             try {
                 ws.terminate();
-                activeConnections.delete(ws);
-                cleaned++;
+                // 正确清理：调用完整的 cleanup 逻辑
+                if (activeConnections.has(ws)) {
+                    activeConnections.delete(ws);
+                    decrementConnection(ws.clientAddr || 'unknown');
+                    closeSyncSession(ws, 'stale-detected');
+                    cleaned++;
+                }
             } catch (e) {}
             continue;
         }
@@ -457,8 +462,8 @@ function healthCheckConnections() {
         if (connectionDuration > SLOW_CONNECTION_MIN_DURATION) {
             const avgRate = (ws.bytesIn || 0) / connectionDurationSec;
             const idleTime = now - (ws.lastActivity || now);
-            // 有数据但速率极低，且最近有活动（不是完全空闲），可能是半开连接
-            if (avgRate > 0 && avgRate < SLOW_CONNECTION_RATE_THRESHOLD && idleTime < 60000) {
+            // 有数据但速率极低，且长时间无活动，可能是半开连接
+            if (avgRate > 0 && avgRate < SLOW_CONNECTION_RATE_THRESHOLD && idleTime > 60000) {
                 slowFound++;
                 logger.warn(`Slow connection detected: session=${ws.syncSessionId} | rate=${avgRate.toFixed(1)}B/s | bytesIn=${ws.bytesIn} | duration=${connectionDurationSec.toFixed(0)}s`);
                 try {
@@ -483,15 +488,25 @@ function healthCheckConnections() {
                         if (stillIdle) {
                             try {
                                 ws.terminate();
-                                activeConnections.delete(ws);
+                                // 正确清理：调用完整的 cleanup 逻辑
+                                if (activeConnections.has(ws)) {
+                                    activeConnections.delete(ws);
+                                    decrementConnection(ws.clientAddr || 'unknown');
+                                    closeSyncSession(ws, 'idle-timeout');
+                                }
                             } catch (e) {}
                         }
                     }
                 }, 5000);
             } catch (e) {
                 try { ws.terminate(); } catch (e2) {}
-                activeConnections.delete(ws);
-                cleaned++;
+                // 正确清理：调用完整的 cleanup 逻辑
+                if (activeConnections.has(ws)) {
+                    activeConnections.delete(ws);
+                    decrementConnection(ws.clientAddr || 'unknown');
+                    closeSyncSession(ws, 'health-check-error');
+                    cleaned++;
+                }
             }
         }
     }

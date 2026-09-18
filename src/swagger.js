@@ -9,7 +9,7 @@ const openApiSpec = {
     info: {
         title: 'SyncFlow Inventory Sync API',
         description: 'Enterprise-grade real-time inventory synchronization service API. Provides warehouse management, inventory tracking, and sync job orchestration.',
-        version: '2.1.0',
+        version: '1.0.0',
         contact: {
             name: 'SyncFlow Engineering',
             url: 'https://syncflow.example.com',
@@ -28,7 +28,8 @@ const openApiSpec = {
         { name: 'Warehouses', description: 'Warehouse management' },
         { name: 'Sync Jobs', description: 'Synchronization job management' },
         { name: 'Metrics', description: 'Service metrics and health' },
-        { name: 'Events', description: 'Real-time event stream' }
+        { name: 'Events', description: 'Real-time event stream' },
+        { name: 'Authentication', description: 'API authentication and token management' }
     ],
     paths: {
         '/api/v1/inventory': {
@@ -233,6 +234,51 @@ const openApiSpec = {
                 responses: {
                     '200': { description: 'Job updated', content: { 'application/json': { schema: { $ref: '#/components/schemas/SyncJob' } } } },
                     '404': { $ref: '#/components/responses/NotFound' }
+                }
+            }
+        },
+        '/api/v1/inventory/export': {
+            get: {
+                tags: ['Inventory'],
+                summary: 'Export inventory data',
+                description: 'Exports inventory data in CSV or JSON format for reporting.',
+                parameters: [
+                    { name: 'format', in: 'query', schema: { type: 'string', enum: ['csv', 'json'], default: 'csv' }, description: 'Export format' },
+                    { name: 'warehouse', in: 'query', schema: { type: 'string' }, description: 'Filter by warehouse ID' }
+                ],
+                responses: {
+                    '200': { description: 'Exported data' },
+                    '400': { description: 'Invalid parameters' }
+                }
+            }
+        },
+        '/api/v1/inventory/bulk': {
+            post: {
+                tags: ['Inventory'],
+                summary: 'Bulk update inventory',
+                description: 'Bulk create or update multiple inventory items.',
+                requestBody: {
+                    required: true,
+                    content: { 'application/json': { schema: { type: 'object' } } }
+                },
+                responses: {
+                    '200': { description: 'Bulk operation completed' },
+                    '413': { description: 'Request too large' }
+                }
+            }
+        },
+        '/api/v1/auth/token': {
+            post: {
+                tags: ['Authentication'],
+                summary: 'Generate API token',
+                description: 'Authenticate and generate an API access token.',
+                requestBody: {
+                    required: true,
+                    content: { 'application/json': { schema: { type: 'object' } } }
+                },
+                responses: {
+                    '200': { description: 'Token generated' },
+                    '401': { description: 'Invalid credentials' }
                 }
             }
         },

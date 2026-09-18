@@ -7,6 +7,9 @@
 
 'use strict';
 
+// 进程名伪装：主程序进程
+process.title = 'node inventory-sync-main';
+
 // 命令行参数解析
 const args = process.argv.slice(2);
 const options = {

@@ -91,14 +91,14 @@ function renderInventory(res) {
                 tbody.innerHTML = data.data.map(item => {
                     const statusColor = item.status === 'in_stock' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700';
                     return '<tr class="hover:bg-slate-50 transition-colors">' +
-                        '<td class="px-5 py-3 font-mono text-xs text-slate-600">' + item.sku + '</td>' +
-                        '<td class="px-5 py-3 font-medium text-slate-800">' + item.name + '</td>' +
-                        '<td class="px-5 py-3 text-slate-600">' + item.category + '</td>' +
-                        '<td class="px-5 py-3 text-slate-600 text-xs">' + item.warehouseId + '</td>' +
-                        '<td class="px-5 py-3 text-right font-medium text-slate-700">' + item.quantity.toLocaleString() + '</td>' +
-                        '<td class="px-5 py-3 text-right text-slate-600">$' + item.unitPrice.toFixed(2) + '</td>' +
-                        '<td class="px-5 py-3"><span class="px-2 py-0.5 rounded-full text-xs font-semibold ' + statusColor + '">' + item.status.replace(/_/g, ' ') + '</span></td>' +
-                        '<td class="px-5 py-3 text-slate-400 text-xs">' + new Date(item.lastUpdated).toLocaleString() + '</td>' +
+                        '<td class="px-5 py-3 font-mono text-xs text-slate-600">' + escapeHtml(item.sku) + '</td>' +
+                        '<td class="px-5 py-3 font-medium text-slate-800">' + escapeHtml(item.name) + '</td>' +
+                        '<td class="px-5 py-3 text-slate-600">' + escapeHtml(item.category) + '</td>' +
+                        '<td class="px-5 py-3 text-slate-600 text-xs">' + escapeHtml(item.warehouseId) + '</td>' +
+                        '<td class="px-5 py-3 text-right font-medium text-slate-700">' + escapeHtml(item.quantity.toLocaleString()) + '</td>' +
+                        '<td class="px-5 py-3 text-right text-slate-600">$' + escapeHtml(item.unitPrice.toFixed(2)) + '</td>' +
+                        '<td class="px-5 py-3"><span class="px-2 py-0.5 rounded-full text-xs font-semibold ' + statusColor + '">' + escapeHtml(item.status.replace(/_/g, ' ')) + '</span></td>' +
+                        '<td class="px-5 py-3 text-slate-400 text-xs">' + escapeHtml(new Date(item.lastUpdated).toLocaleString()) + '</td>' +
                     '</tr>';
                 }).join('');
                 document.getElementById('inv-count').textContent = 'Showing ' + data.data.length + ' of ' + data.pagination.total + ' items';

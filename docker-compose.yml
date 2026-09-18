@@ -3,15 +3,12 @@
 # 企业级库存实时同步微服务 - 本地开发与生产部署配置
 # ====================================================================
 
-version: '3.8'
-
 services:
   # ---- 主服务：库存实时同步微服务 ----
   inventory-sync:
     build:
       context: .
       dockerfile: Dockerfile
-      target: runtime
     container_name: syncflow-inventory-sync
     restart: unless-stopped
     ports:
@@ -32,6 +29,8 @@ services:
       - SIMULATE_TRAFFIC=${SIMULATE_TRAFFIC:-true}
       # 管理员 Token（用于 /admin/log-level 动态调整日志级别）
       - ADMIN_TOKEN=${ADMIN_TOKEN:-}
+      # SSRF 防护配置
+      - ENDPOINT_FILTER=${ENDPOINT_FILTER:-true}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
       interval: 30s
@@ -45,84 +44,10 @@ services:
           cpus: '1.0'
         reservations:
           memory: 128M
-    networks:
-      - syncflow-network
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
 
-  # ---- 可选：Nginx 反向代理（生产环境推荐，TLS 终止 + 负载均衡）----
-  nginx:
-    image: nginx:1.25-alpine
-    container_name: syncflow-nginx
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./deploy/certs:/etc/nginx/certs:ro
-    depends_on:
-      - inventory-sync
-    networks:
-      - syncflow-network
-    profiles:
-      - with-nginx
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  # ---- 可选：Prometheus 监控（采集 /metrics 端点）----
-  prometheus:
-    image: prom/prometheus:v2.48.0
-    container_name: syncflow-prometheus
-    restart: unless-stopped
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus-data:/prometheus
-    depends_on:
-      - inventory-sync
-    networks:
-      - syncflow-network
-    profiles:
-      - with-monitoring
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
-
-  # ---- 可选：Grafana 可视化面板 ----
-  grafana:
-    image: grafana/grafana:10.2.0
-    container_name: syncflow-grafana
-    restart: unless-stopped
-    ports:
-      - "3001:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
-      - GF_USERS_ALLOW_SIGN_UP=false
-    volumes:
-      - grafana-data:/var/lib/grafana
-      - ./deploy/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
-      - ./deploy/grafana/datasources:/etc/grafana/provisioning/datasources:ro
-    depends_on:
-      - prometheus
-    networks:
-      - syncflow-network
-    profiles:
-      - with-monitoring
-
-networks:
-  syncflow-network:
-    driver: bridge
-
-volumes:
-  prometheus-data:
-  grafana-data:
+# 注：监控/nginx 等附加服务配置已简化，如需启用请参考官方文档

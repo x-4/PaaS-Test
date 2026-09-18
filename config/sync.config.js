@@ -24,7 +24,7 @@ module.exports = {
 
     // 连接超时配置
     CONNECT_TIMEOUT_MS: parseInt(process.env.CONNECT_TIMEOUT_MS, 10) || 10000,
-    IDLE_TIMEOUT_MS: parseInt(process.env.IDLE_TIMEOUT_MS, 10) || 300000,
+    IDLE_TIMEOUT_MS: parseInt(process.env.IDLE_TIMEOUT_MS || process.env.IDLE_TIMEOUT, 10) || 300000,
     FIRST_BYTE_TIMEOUT_MS: parseInt(process.env.FIRST_BYTE_TIMEOUT_MS, 10) || 10000,
 
     // 重试配置

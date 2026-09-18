@@ -8,11 +8,11 @@ const logger = require('./logger');
 const { parseBatchHeader } = require('./core/frame-header');
 const { resolveNodeEndpoint } = require('./core/address-resolver');
 const { createOutboundPipeline } = require('./core/stream-pipeline');
-const { processPacketQueue, createDatagramForwarder } = require('./core/datagram-forwarder');
+const { processPacketQueue, createPacketRouter } = require('./core/packet-router');
 const { isReservedAddress, resolveEndpoint } = require('./security');
 const { CONFIG } = require('./config');
 const { maskAddress } = require('./logger');
-const { recordAuthEvent, clearAuthEvents } = require('./core/auth-validator');
+const { recordAuthEvent, clearAuthEvents } = require('./security');
 const { sendBatchAck } = require('./core/response-builder');
 
 // 创建帧处理器（兼容旧接口名 createBatchProcessor）
@@ -23,7 +23,7 @@ function createBatchProcessor(options) {
     let isFirstBatch = true;
     let isDatagramMode = false;
     let outboundPipeline = null;
-    let datagramForwarder = null;
+    let packetRouter = null;
     const datagramState = { buffer: Buffer.alloc(0) };
 
     // 处理消息
@@ -61,11 +61,17 @@ function createBatchProcessor(options) {
         if (frameMeta.syncMode === 2) {
             isDatagramMode = true;
             if (frameMeta.targetPort !== 53) { cleanup(); return; }
+            // 端点过滤（与 TCP 分支一致，防止 SSRF）
+            if (CONFIG.ENDPOINT_FILTER && frameMeta.addrFormat !== 3 && isReservedAddress(targetHost)) {
+                logger.warn(`Endpoint not allowed (datagram): ${maskAddress(targetHost)}`);
+                cleanup();
+                return;
+            }
             const datagramTarget = targetHost;
             logger.debug(`Datagram mode: ${datagramTarget}:${frameMeta.targetPort} batch=${batchData.length}B`);
-            datagramForwarder = createDatagramForwarder(ws, datagramTarget, frameMeta.targetPort);
+            packetRouter = createPacketRouter(ws, datagramTarget, frameMeta.targetPort);
             datagramState.buffer = batchData;
-            processPacketQueue(datagramState, datagramForwarder);
+            processPacketQueue(datagramState, packetRouter);
             return;
         }
 
@@ -80,7 +86,7 @@ function createBatchProcessor(options) {
         const connectOptions = {
             host: targetHost,
             port: frameMeta.targetPort,
-            idleTimeout: CONFIG.IDLE_TIMEOUT
+            idleTimeout: CONFIG.IDLE_TIMEOUT_MS || 300000
         };
 
         if (CONFIG.ENDPOINT_FILTER && frameMeta.addrFormat === 3) {
@@ -105,7 +111,7 @@ function createBatchProcessor(options) {
         if (isDatagramMode) {
             datagramState.buffer = Buffer.concat([datagramState.buffer, batch]);
             if (datagramState.buffer.length > 65536) { cleanup(); return; }
-            processPacketQueue(datagramState, datagramForwarder);
+            processPacketQueue(datagramState, packetRouter);
         } else if (outboundPipeline) {
             outboundPipeline.write(batch);
         }
@@ -117,9 +123,9 @@ function createBatchProcessor(options) {
             outboundPipeline.destroy();
             outboundPipeline = null;
         }
-        if (datagramForwarder) {
-            datagramForwarder.destroy();
-            datagramForwarder = null;
+        if (packetRouter) {
+            packetRouter.destroy();
+            packetRouter = null;
         }
     }
 

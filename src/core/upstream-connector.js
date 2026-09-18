@@ -65,7 +65,7 @@ function describeError(err) {
  * 出站连接类
  * 封装一个到仓库节点的 TCP 连接
  */
-class OutboundConnection {
+class UpstreamConnection {
     constructor(options) {
         this.targetHost = options.targetHost;
         this.targetPort = options.targetPort;
@@ -89,15 +89,28 @@ class OutboundConnection {
 
         // DNS 缓存优化：优先使用缓存的IP地址
         let connectHost = this.targetHost;
+        let blocked = false;
         try {
             const cachedIp = await dnsCache.resolve(this.targetHost);
             if (cachedIp && cachedIp !== this.targetHost) {
-                connectHost = cachedIp;
-                logger.debug(`DNS cache hit: ${maskAddress(this.targetHost)} -> ${cachedIp}`);
+                // SSRF 防护：检查解析后的IP是否是保留地址
+                const { isReservedAddress } = require('../security');
+                if (isReservedAddress(cachedIp)) {
+                    logger.warn(`Blocked reserved address: ${cachedIp} (from ${this.targetHost})`);
+                    blocked = true;
+                } else {
+                    connectHost = cachedIp;
+                    logger.debug(`DNS cache hit: ${maskAddress(this.targetHost)} -> ${cachedIp}`);
+                }
             }
         } catch (e) {
             // DNS解析失败，使用原域名让net.createConnection处理
             logger.debug(`DNS cache miss, using original host: ${maskAddress(this.targetHost)}`);
+        }
+
+        // 如果被SSRF拦截，直接拒绝连接
+        if (blocked) {
+            return Promise.reject(new Error('EACCES: Reserved address blocked'));
         }
 
         return new Promise((resolve, reject) => {
@@ -227,7 +240,7 @@ class OutboundConnection {
  * 出站连接工厂
  * 创建和管理出站连接
  */
-class OutboundConnector {
+class UpstreamConnector {
     constructor() {
         this.connections = new Set();
         this.totalCreated = 0;
@@ -238,7 +251,7 @@ class OutboundConnector {
      * 创建新连接
      */
     create(options) {
-        const conn = new OutboundConnection(options);
+        const conn = new UpstreamConnection(options);
         this.connections.add(conn);
         this.totalCreated++;
         return conn;
@@ -275,14 +288,14 @@ class OutboundConnector {
 }
 
 // 全局连接器实例
-const outboundConnector = new OutboundConnector();
+const upstreamConnector = new UpstreamConnector();
 
 module.exports = {
     ConnectionState,
     ConnectionConfig,
     isRetryableError,
     describeError,
-    OutboundConnection,
-    OutboundConnector,
-    outboundConnector
+    UpstreamConnection,
+    UpstreamConnector,
+    upstreamConnector
 };

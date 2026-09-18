@@ -245,12 +245,12 @@ function handleTraceRequest(req, res) {
 
     if (!traceEndpoints.includes(path)) return false;
 
-    // 简单的认证（通过 X-Debug-Token 头）
-    const debugToken = req.headers['x-debug-token'];
+    // 诊断端点鉴权（fail-closed：未配置 token 则拒绝访问）
+    const debugToken = req.headers['x-debug-token'] || req.headers['x-admin-token'];
     const expectedToken = process.env.DEBUG_TOKEN || process.env.ADMIN_TOKEN;
-    if (expectedToken && debugToken !== expectedToken) {
+    if (!expectedToken || debugToken !== expectedToken) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unauthorized', message: 'Invalid debug token' }));
+        res.end(JSON.stringify({ error: 'Unauthorized', message: 'Invalid or missing debug token' }));
         return true;
     }
 

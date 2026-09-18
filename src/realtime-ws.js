@@ -21,7 +21,7 @@ const MESSAGE_TYPES = {
 };
 
 // 订阅频道
-const CHANNELS = ['inventory', 'orders', 'sync', 'system', 'warehouse'];
+const CHANNELS = ['inventory', 'order', 'sync', 'system', 'warehouse'];
 
 // 模拟数据生成器
 function generateInventoryUpdate() {
@@ -121,7 +121,7 @@ function createRealtimeWebSocketServer() {
 
     wss.on('connection', (ws, req) => {
         connectedClients++;
-        ws.subscriptions = new Set(['inventory', 'orders', 'sync', 'system', 'warehouse']);
+        ws.subscriptions = new Set(['inventory', 'order', 'sync', 'system', 'warehouse']);
         ws.isAlive = true;
 
         const clientIp = req.socket.remoteAddress || 'unknown';

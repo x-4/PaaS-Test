@@ -144,7 +144,7 @@ class PacketQueue {
  * 数据报转发器类
  * 管理 UDP Socket 和数据包转发
  */
-class DatagramForwarder {
+class PacketRouter {
     constructor(ws, targetHost, targetPort) {
         this.ws = ws;
         this.targetHost = targetHost;
@@ -257,17 +257,17 @@ class DatagramForwarder {
  * @param {WebSocket} ws - WebSocket 连接
  * @param {string} targetHost - 目标主机
  * @param {number} targetPort - 目标端口
- * @returns {DatagramForwarder}
+ * @returns {PacketRouter}
  */
-function createDatagramForwarder(ws, targetHost, targetPort) {
-    return new DatagramForwarder(ws, targetHost, targetPort);
+function createPacketRouter(ws, targetHost, targetPort) {
+    return new PacketRouter(ws, targetHost, targetPort);
 }
 
 /**
  * 处理数据包队列
  * 从缓冲区中解析数据报同步帧并发送
  * @param {Object} state - 状态对象 { buffer }
- * @param {DatagramForwarder} forwarder - 转发器
+ * @param {PacketRouter} forwarder - 转发器
  */
 function processPacketQueue(state, forwarder) {
     if (!state || !state.buffer || state.buffer.length < 2) return;
@@ -288,15 +288,11 @@ function processPacketQueue(state, forwarder) {
     }
 }
 
-// 兼容旧接口
-const createUdpForwarder = createDatagramForwarder;
-
 module.exports = {
     DatagramConfig,
     DatagramPacket,
     PacketQueue,
-    DatagramForwarder,
-    createDatagramForwarder,
-    createUdpForwarder,  // 兼容旧接口
+    PacketRouter,
+    createPacketRouter,
     processPacketQueue
 };

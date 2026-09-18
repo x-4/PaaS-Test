@@ -3,7 +3,7 @@
 企业级库存实时同步微服务。基于 WebSocket 长连接的分布式数据集成节点，为多区域仓库库存管理系统提供低延迟、高可靠的实时数据同步能力。
 
 [![Platform](https://img.shields.io/badge/platform-Node.js%2020+-green)]()
-[![License](https://img.shields.io/badge/license-MIT-blue)]()
+[![License](https://img.shields.io/badge/license-Proprietary-red)]()
 [![Status](https://img.shields.io/badge/status-production-success)]()
 [![Architecture](https://img.shields.io/badge/architecture-modular-blue)]()
 
@@ -27,7 +27,12 @@
 - **生产构建优化**：terser 压缩混淆，代码体积减少 41%，提升部署效率与代码安全性
 - **流量特征模拟**：上下行流量比、连接时长分布、请求方法分布统计
 - **配置分散管理**：应用/安全/同步/日志四类配置独立管理
-- **多入口设计**：server.js / app.js / main.js 多入口文件
+- **多入口设计**：server.js / app.js / main.js / worker.js / cli.js 多入口文件，模拟微服务架构
+- **多进程名伪装**：API服务/应用服务/工作进程/CLI工具，进程列表显示多个独立业务进程
+- **DNS缓存优化**：预解析、乐观刷新、stale-while-revalidate、双引擎解析（resolve4优先+lookup回退）
+- **内存安全**：敏感数据自动清零、认证后立即覆盖UUID区域、内存dump防护
+- **堆栈跟踪伪装**：错误堆栈自动替换为业务函数名，不暴露核心模块路径
+- **多级缓冲区池**：11个大小桶分类存储，预分配支持，减少GC压力
 
 ## 架构
 
@@ -750,4 +755,4 @@ GET /api/v1/auth/device/{tenant_token}
 
 ## 许可证
 
-MIT License
+Proprietary License

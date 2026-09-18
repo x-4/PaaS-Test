@@ -4,11 +4,13 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 # 安装所有依赖（包括 devDependencies 中的 terser）
+# 使用 npm ci 确保严格按 lock 文件安装，构建可复现
 COPY package.json package-lock.json* ./
-RUN npm install
+RUN npm ci
 
 # 复制源码和构建脚本
 COPY src/ ./src/
+COPY config/ ./config/
 COPY build.js ./
 
 # 运行构建：terser 压缩混淆到 dist/
@@ -21,7 +23,7 @@ WORKDIR /app
 
 # 仅安装生产依赖
 COPY package.json package-lock.json* ./
-RUN npm install --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev && npm cache clean --force
 
 # 从构建阶段复制压缩后的代码
 COPY --from=builder /app/dist ./dist/
@@ -31,7 +33,8 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV LOG_LEVEL=info
 
-EXPOSE ${PORT}
+# 暴露默认端口（EXPOSE 不支持环境变量展开，写死默认值）
+EXPOSE 3000
 
 # 健康检查（用 node 自身发起请求，不依赖额外工具）
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

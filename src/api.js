@@ -5,6 +5,30 @@
 // ====================================================================
 
 // ---- 模拟数据 ----
+// 安全限制：防止内存无限增长
+const MAX_WAREHOUSES = 100;
+const MAX_INVENTORY_ITEMS = 500;
+const MAX_SYNC_JOBS = 200;
+
+// 字段白名单：防止客户端通过批量赋值注入任意字段
+function filterFields(body, allowedFields) {
+    const filtered = {};
+    for (const key of allowedFields) {
+        if (body[key] !== undefined) {
+            filtered[key] = body[key];
+        }
+    }
+    return filtered;
+}
+
+const WAREHOUSE_ALLOWED = ['name', 'region', 'city', 'capacity', 'status'];
+const INVENTORY_ALLOWED = ['name', 'category', 'warehouseId', 'quantity', 'unitPrice', 'status', 'reserved'];
+const SYNCJOB_ALLOWED = ['type', 'sourceWarehouse', 'targetWarehouse', 'priority', 'itemsCount'];
+
+// 持久化存储（用于 create/delete 操作，上限检查）
+const INVENTORY = [];
+const SYNC_JOBS = [];
+
 const WAREHOUSES = [
     { id: 'WH-EU-001', name: 'EU-Central Distribution Center', region: 'eu-central-1', city: 'Frankfurt', capacity: 50000, status: 'active', createdAt: '2024-01-15T08:00:00Z' },
     { id: 'WH-US-001', name: 'US-East Fulfillment Center', region: 'us-east-1', city: 'Ashburn', capacity: 80000, status: 'active', createdAt: '2024-02-20T10:30:00Z' },
@@ -35,20 +59,36 @@ function jsonResponse(res, data, statusCode = 200) {
 }
 
 // 解析请求体（JSON）
+// 安全限制：最大 1MB 请求体，防止 OOM 攻击
+const MAX_BODY_SIZE = 1 * 1024 * 1024; // 1MB
+
 function parseBody(req) {
     return new Promise((resolve) => {
         let body = '';
-        req.on('data', (chunk) => { body += chunk; });
+        let aborted = false;
+        req.on('data', (chunk) => {
+            if (aborted) return;
+            body += chunk;
+            if (body.length > MAX_BODY_SIZE) {
+                aborted = true;
+                req.destroy();
+                resolve({ __error: 'REQUEST_TOO_LARGE' });
+            }
+        });
         req.on('end', () => {
+            if (aborted) return;
             try {
                 resolve(body ? JSON.parse(body) : {});
             } catch (e) {
                 resolve({});
             }
         });
-        req.on('error', () => resolve({}));
+        req.on('error', () => {
+            if (!aborted) resolve({});
+        });
     });
 }
+
 
 // 生成模拟库存项
 function generateInventoryItem(sku) {
@@ -110,6 +150,19 @@ function getWarehouseById(req, res, id) {
 // POST /api/v1/warehouses
 async function createWarehouse(req, res) {
     const body = await parseBody(req);
+    // 去重检查：如果指定了name，检查是否已存在
+    if (body.name) {
+        const existing = WAREHOUSES.find(w => w.name === body.name);
+        if (existing) {
+            jsonResponse(res, { error: 'Warehouse already exists', code: 'DUPLICATE', data: existing }, 409);
+            return;
+        }
+    }
+    // 上限检查
+    if (WAREHOUSES.length >= MAX_WAREHOUSES) {
+        jsonResponse(res, { error: 'Maximum warehouses limit reached', code: 'LIMIT_EXCEEDED' }, 413);
+        return;
+    }
     const id = 'WH-' + String(Date.now()).slice(-6);
     const warehouse = {
         id,
@@ -120,6 +173,7 @@ async function createWarehouse(req, res) {
         status: 'active',
         createdAt: new Date().toISOString()
     };
+    WAREHOUSES.push(warehouse);
     jsonResponse(res, { data: warehouse, message: 'Warehouse created successfully' }, 201);
 }
 
@@ -131,7 +185,7 @@ async function updateWarehouse(req, res, id) {
         jsonResponse(res, { error: 'Warehouse not found', code: 'NOT_FOUND' }, 404);
         return;
     }
-    const updated = { ...warehouse, ...body, id, lastUpdated: new Date().toISOString() };
+    const updated = { ...warehouse, ...filterFields(body, WAREHOUSE_ALLOWED), id, lastUpdated: new Date().toISOString() };
     jsonResponse(res, { data: updated, message: 'Warehouse updated successfully' });
 }
 
@@ -150,11 +204,14 @@ function deleteWarehouse(req, res, id) {
 // GET /api/v1/inventory
 function getInventory(req, res) {
     const { page, limit, offset } = paginate(req, 150);
-    const items = [];
-    for (let i = 0; i < limit; i++) {
-        const sku = 'SKU-' + String(10000 + offset + i).padStart(5, '0');
-        items.push(generateInventoryItem(sku));
+    // 如果持久化数组为空，生成初始数据
+    if (INVENTORY.length === 0) {
+        for (let i = 0; i < 50; i++) {
+            const sku = 'SKU-' + String(10000 + i).padStart(5, '0');
+            INVENTORY.push(generateInventoryItem(sku));
+        }
     }
+    const items = INVENTORY.slice(offset, offset + limit);
     jsonResponse(res, {
         data: items,
         pagination: { page, limit, total: 150, totalPages: Math.ceil(150 / limit) },
@@ -170,13 +227,19 @@ function getInventoryItem(req, res, sku) {
 // POST /api/v1/inventory
 async function createInventoryItem(req, res) {
     const body = await parseBody(req);
+    // 上限检查
+    if (INVENTORY.length >= MAX_INVENTORY_ITEMS) {
+        jsonResponse(res, { error: 'Maximum inventory items limit reached', code: 'LIMIT_EXCEEDED' }, 413);
+        return;
+    }
     const sku = body.sku || 'SKU-' + String(Date.now()).slice(-5);
     const item = {
         ...generateInventoryItem(sku),
-        ...body,
+        ...filterFields(body, INVENTORY_ALLOWED),
         sku,
         lastUpdated: new Date().toISOString()
     };
+    INVENTORY.push(item);
     jsonResponse(res, { data: item, message: 'Inventory item created successfully' }, 201);
 }
 
@@ -185,7 +248,7 @@ async function updateInventoryItem(req, res, sku) {
     const body = await parseBody(req);
     const item = {
         ...generateInventoryItem(sku),
-        ...body,
+        ...filterFields(body, INVENTORY_ALLOWED),
         sku,
         lastUpdated: new Date().toISOString()
     };
@@ -202,11 +265,14 @@ function deleteInventoryItem(req, res, sku) {
 // GET /api/v1/sync/jobs
 function getSyncJobs(req, res) {
     const { page, limit, offset } = paginate(req, 80);
-    const jobs = [];
-    for (let i = 0; i < limit; i++) {
-        const jobId = 'JOB-' + String(20000 + offset + i).padStart(6, '0');
-        jobs.push(generateSyncJob(jobId));
+    // 如果持久化数组为空，生成初始数据
+    if (SYNC_JOBS.length === 0) {
+        for (let i = 0; i < 30; i++) {
+            const jobId = 'JOB-' + String(20000 + i).padStart(6, '0');
+            SYNC_JOBS.push(generateSyncJob(jobId));
+        }
     }
+    const jobs = SYNC_JOBS.slice(offset, offset + limit);
     jsonResponse(res, {
         data: jobs,
         pagination: { page, limit, total: 80, totalPages: Math.ceil(80 / limit) },
@@ -222,16 +288,22 @@ function getSyncJobById(req, res, jobId) {
 // POST /api/v1/sync/jobs
 async function createSyncJob(req, res) {
     const body = await parseBody(req);
+    // 上限检查
+    if (SYNC_JOBS.length >= MAX_SYNC_JOBS) {
+        jsonResponse(res, { error: 'Maximum sync jobs limit reached', code: 'LIMIT_EXCEEDED' }, 413);
+        return;
+    }
     const jobId = 'JOB-' + String(Date.now()).slice(-6);
     const job = {
         ...generateSyncJob(jobId),
-        ...body,
+        ...filterFields(body, SYNCJOB_ALLOWED),
         jobId,
         status: 'pending',
         progress: 0,
         startedAt: null,
         createdAt: new Date().toISOString()
     };
+    SYNC_JOBS.push(job);
     jsonResponse(res, { data: job, message: 'Sync job created successfully' }, 201);
 }
 
@@ -240,7 +312,7 @@ async function updateSyncJob(req, res, jobId) {
     const body = await parseBody(req);
     const job = {
         ...generateSyncJob(jobId),
-        ...body,
+        ...filterFields(body, SYNCJOB_ALLOWED),
         jobId,
         lastUpdated: new Date().toISOString()
     };

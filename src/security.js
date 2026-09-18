@@ -212,10 +212,26 @@ function getTotalTrackedIps() {
 // ====================================================================
 // 工具：提取客户端地址
 // ====================================================================
+// 验证 IP 地址格式（IPv4 或 IPv6）
+function isValidIp(ip) {
+    if (!ip || typeof ip !== 'string') return false;
+    // IPv4
+    const ipv4 = /^(\d{1,3}\.){3}\d{1,3}$/;
+    // IPv6（简化验证）
+    const ipv6 = /^[0-9a-fA-F:]+$/;
+    return ipv4.test(ip) || ipv6.test(ip);
+}
+
 function getClientAddress(req) {
+    // PaaS 平台通常有反向代理，X-Forwarded-For 可信
+    // 但需验证格式，防止恶意输入绕过 IP 封禁
     const forwarded = req.headers['x-forwarded-for'];
     if (forwarded) {
-        return forwarded.split(',')[0].trim();
+        const firstIp = forwarded.split(',')[0].trim();
+        if (isValidIp(firstIp)) {
+            return firstIp;
+        }
+        // 格式不合法时回退到 socket 地址，避免被伪造
     }
     return req.socket.remoteAddress || 'unknown';
 }

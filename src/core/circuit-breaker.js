@@ -216,6 +216,18 @@ class CircuitBreaker {
 // 全局熔断器实例
 const circuitBreaker = new CircuitBreaker();
 
+// 定期清理熔断器过期记录（每5分钟清理一次，防止内存泄漏）
+const circuitCleanupInterval = setInterval(() => {
+    const cleaned = circuitBreaker.cleanup(10 * 60 * 1000); // 清理10分钟未活动的记录
+    if (cleaned > 0) {
+        // 静默清理，不打日志
+    }
+}, 5 * 60 * 1000);
+// 允许事件循环退出时自动清理
+if (circuitCleanupInterval.unref) {
+    circuitCleanupInterval.unref();
+}
+
 /**
  * 重试控制器
  * 管理指数退避重试逻辑

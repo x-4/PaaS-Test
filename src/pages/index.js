@@ -19,7 +19,7 @@ function handlePageRequest(req, res) {
     const path = url.pathname;
 
     if (req.method === 'GET') {
-        if (path === '/') return renderDashboard(res), true;
+        if (path === '/' || path === '/dashboard') return renderDashboard(res), true;
         if (path === '/login') return renderLogin(res), true;
         if (path === '/inventory') return renderInventory(res), true;
         if (path === '/warehouses') return renderWarehouses(res), true;

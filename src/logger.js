@@ -79,7 +79,14 @@ function log(level, module, requestId, ...args) {
                 entry.error = { name: arg.name, message: arg.message, stack: arg.stack };
                 parts.push(arg.message);
             } else if (typeof arg === 'object') {
-                Object.assign(entry, arg);
+                // 防止日志注入：用户对象放到 extra 字段，不覆盖核心字段
+                if (!entry.extra) entry.extra = {};
+                for (const key of Object.keys(arg)) {
+                    // 禁止覆盖核心字段
+                    if (!['timestamp', 'level', 'service', 'pid', 'message', 'requestId'].includes(key)) {
+                        entry.extra[key] = arg[key];
+                    }
+                }
             } else {
                 parts.push(String(arg));
             }

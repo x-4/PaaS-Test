@@ -552,11 +552,6 @@ function _handleRequest(req, res, path, requestId, trace) {
 
     if (handlePageRequest(req, res)) return;
 
-    // API 限流模拟
-    const riskFactor = Math.random();
-    if (riskFactor < 0.03) { res.writeHead(429); return res.end('Too Many Requests'); }
-    if (riskFactor < 0.06) { res.writeHead(401); return res.end('Unauthorized Token'); }
-
     // 未知路径返回随机业务错误（伪装为正常业务系统的错误响应）
     return sendBusinessError(req, res, path);
 }
@@ -762,6 +757,12 @@ let trafficSimulator = null;
 let scheduledJobSimulator = null;
 const GRACEFUL_SHUTDOWN_MAX_WAIT = 30000; // 优雅关闭最大等待时间（30秒）
 
+// 运行时状态保存（内存存储模式下为空操作，保留接口供未来扩展）
+function saveRuntimeState() {
+    // 运行时状态存储在内存中，进程退出后自然清除
+    // 此函数保留为扩展点，如需持久化可在此实现
+}
+
 function gracefulShutdown(signal) {
     if (isShuttingDown) return;
     isShuttingDown = true;
@@ -862,9 +863,12 @@ server.listen(CONFIG.PORT, () => {
     if (platformConfig.note) {
         logger.info(`Platform note: ${platformConfig.note}`);
     }
-    // 仅在自动生成时输出管理员 Token（环境变量设置的不输出，避免泄露）
+    // 管理员 Token 已就绪（不输出到日志，避免泄露到平台日志）
+    // 如需查看，请通过环境变量 ADMIN_TOKEN 显式设置
     if (!process.env.ADMIN_TOKEN) {
-        logger.info(`Admin token (for /admin/log-level): ${ADMIN_TOKEN}`);
+        logger.info('Admin token auto-generated (set ADMIN_TOKEN env to override)');
+    } else {
+        logger.info('Admin token loaded from environment');
     }
 
     // ---- 优雅启动预热（避免首请求慢）----
@@ -917,7 +921,7 @@ server.listen(CONFIG.PORT, () => {
         } else if (status === 'healthy') {
             logger.info('Event loop recovered, resuming traffic simulator');
             if (!trafficSimulator) {
-                trafficSimulator = startTrafficSimulator(PORT);
+                trafficSimulator = startTrafficSimulator(CONFIG.PORT, process.env.SIMULATE_TRAFFIC !== 'false');
             }
             if (!scheduledJobSimulator) {
                 scheduledJobSimulator = startScheduledJobSimulator();
