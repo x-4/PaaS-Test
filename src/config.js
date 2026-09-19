@@ -5,6 +5,12 @@
 
 const { CONFIG: baseConfig, validateConfig: baseValidate } = require('../config');
 
+// 解析可选整数环境变量："0" 为合法值，仅当解析结果为 NaN 时回退默认值
+const intOr = (raw, def) => {
+    const v = parseInt(raw, 10);
+    return Number.isFinite(v) ? v : def;
+};
+
 // 补充业务特定配置（不在通用配置文件中的项）
 const CONFIG = {
     ...baseConfig,
@@ -22,14 +28,14 @@ const CONFIG = {
     REALTIME_ENDPOINT: '/api/v1/realtime',
 
     // ---- 运行稳定性参数 ----
-    PING_INTERVAL: parseInt(process.env.PING_INTERVAL, 10) || 30000,
-    MEMORY_LIMIT_MB: parseInt(process.env.MEMORY_LIMIT_MB, 10) || 384,
-    SHUTDOWN_TIMEOUT: parseInt(process.env.SHUTDOWN_TIMEOUT, 10) || 10000,
+    PING_INTERVAL: intOr(process.env.PING_INTERVAL, 30000),
+    MEMORY_LIMIT_MB: intOr(process.env.MEMORY_LIMIT_MB, 384),
+    SHUTDOWN_TIMEOUT: intOr(process.env.SHUTDOWN_TIMEOUT, 10000),
 
     // ---- 安全防护参数 ----
-    AUTH_MAX_FAILURES: parseInt(process.env.AUTH_MAX_FAILURES, 10) || 5,
-    AUTH_WINDOW_MS: parseInt(process.env.AUTH_WINDOW_MS, 10) || 60000,
-    AUTH_BAN_MS: parseInt(process.env.AUTH_BAN_MS, 10) || 300000
+    AUTH_MAX_FAILURES: intOr(process.env.AUTH_MAX_FAILURES, 5),
+    AUTH_WINDOW_MS: intOr(process.env.AUTH_WINDOW_MS, 60000),
+    AUTH_BAN_MS: intOr(process.env.AUTH_BAN_MS, 300000)
 };
 
 // 启动前配置校验

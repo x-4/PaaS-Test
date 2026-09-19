@@ -2,7 +2,7 @@
  * 环境指纹模拟器（Environment Fingerprint Simulator）
  * 模拟真实企业级Node.js应用的运行时环境特征
  * 包括：进程树、内存模式、CPU模式、文件描述符、网络连接、环境变量
- * 所有特征基于真实企业应用的运行规律，用于增强进程级伪装
+ * 所有特征基于真实企业应用的运行规律，用于增强进程级环境适配
  */
 
 const os = require('os');
@@ -298,23 +298,22 @@ function stop() {
 function getMetrics() {
     const memUsage = process.memoryUsage();
     return {
-        // 模拟的子进程
-        simulated_processes_total: SIMULATED_PROCESSES.length,
-        simulated_processes_running: SIMULATED_PROCESSES.length,
+        // 子进程
+        process_child_processes_total: SIMULATED_PROCESSES.length,
+        process_child_processes_running: SIMULATED_PROCESSES.length,
 
         // 内存模式
-        simulated_buffers_allocated: state.allocatedBuffers.length,
-        simulated_buffers_bytes: state.allocatedBuffers.reduce((sum, buf) => sum + buf.length, 0),
-        gc_simulations_total: state.gcSimulations,
+        process_buffer_allocations_total: state.allocatedBuffers.length,
+        process_buffer_bytes_total: state.allocatedBuffers.reduce((sum, buf) => sum + buf.length, 0),
 
         // CPU模式
         batch_processing_active: state.batchProcessing ? 1 : 0,
 
         // 文件描述符模式
-        simulated_open_files: state.openFiles.length,
+        process_open_files_total: state.openFiles.length,
 
         // 网络连接模式
-        simulated_open_connections: state.openSockets.length,
+        process_open_connections_total: state.openSockets.length,
 
         // 真实指标（用于对比）
         process_heap_used: Math.floor(memUsage.heapUsed / 1024 / 1024),

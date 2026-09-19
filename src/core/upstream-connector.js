@@ -78,6 +78,7 @@ class UpstreamConnection {
         this.firstByteReceived = false;
         this._firstByteTimer = null;
         this._connectTimer = null;
+        this._connectReject = null;
     }
 
     /**
@@ -114,6 +115,9 @@ class UpstreamConnection {
         }
 
         return new Promise((resolve, reject) => {
+            // 保存 reject 句柄，供 destroy() 在外部销毁时强制 reject 悬挂的 Promise
+            this._connectReject = reject;
+
             const options = { ...this.connectOptions, host: connectHost };
             const socket = net.createConnection(options);
             this.socket = socket;
@@ -121,11 +125,13 @@ class UpstreamConnection {
             // 连接超时
             this._connectTimer = setTimeout(() => {
                 socket.destroy();
+                this._connectReject = null;
                 reject(Object.assign(new Error('Connection timed out'), { code: 'ETIMEDOUT' }));
             }, ConnectionConfig.CONNECT_TIMEOUT_MS);
 
             socket.once('connect', () => {
                 clearTimeout(this._connectTimer);
+                this._connectReject = null;
                 this.state = ConnectionState.CONNECTED;
                 this.connectedAt = Date.now();
 
@@ -145,6 +151,7 @@ class UpstreamConnection {
             socket.once('error', (err) => {
                 clearTimeout(this._connectTimer);
                 this._clearFirstByteTimer();
+                this._connectReject = null;
                 this.state = ConnectionState.ERROR;
                 reject(err);
             });
@@ -155,12 +162,9 @@ class UpstreamConnection {
      * 启动首字节超时计时器
      */
     _startFirstByteTimer() {
-        this._firstByteTimer = setTimeout(() => {
-            if (!this.firstByteReceived) {
-                logger.warn(`First byte timeout: ${maskAddress(this.targetHost)}:${this.targetPort}`);
-                this.destroy();
-            }
-        }, ConnectionConfig.FIRST_BYTE_TIMEOUT_MS);
+        // 透传代理不假设服务端先说话：客户端先发、长轮询、慢 LB 等场景均合法
+        // 保留方法签名以维持调用链完整性，但不启动实际超时计时器
+        this._firstByteTimer = null;
     }
 
     /**
@@ -212,6 +216,15 @@ class UpstreamConnection {
         if (this._connectTimer) {
             clearTimeout(this._connectTimer);
             this._connectTimer = null;
+        }
+        // 如果有悬挂的 connect Promise，强制 reject 防止永久悬挂
+        if (this._connectReject) {
+            const pendingReject = this._connectReject;
+            this._connectReject = null;
+            this.state = ConnectionState.CLOSED;
+            try {
+                pendingReject(new Error('Connection destroyed before connect'));
+            } catch (e) {}
         }
         if (this.socket) {
             this.socket.destroy();

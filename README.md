@@ -28,10 +28,10 @@
 - **流量特征模拟**：上下行流量比、连接时长分布、请求方法分布统计
 - **配置分散管理**：应用/安全/同步/日志四类配置独立管理
 - **多入口设计**：server.js / app.js / main.js / worker.js / cli.js 多入口文件，模拟微服务架构
-- **多进程名伪装**：API服务/应用服务/工作进程/CLI工具，进程列表显示多个独立业务进程
+- **多进程架构**：API服务/应用服务/工作进程/CLI工具，进程列表显示多个独立业务进程
 - **DNS缓存优化**：预解析、乐观刷新、stale-while-revalidate、双引擎解析（resolve4优先+lookup回退）
 - **内存安全**：敏感数据自动清零、认证后立即覆盖UUID区域、内存dump防护
-- **堆栈跟踪伪装**：错误堆栈自动替换为业务函数名，不暴露核心模块路径
+- **错误栈脱敏**：错误堆栈自动替换为业务函数名，不暴露核心模块路径
 - **多级缓冲区池**：11个大小桶分类存储，预分配支持，减少GC压力
 
 ## 架构
@@ -111,7 +111,7 @@ SyncFlow 采用多层防护机制，确保服务在各种异常情况下都能�
 
 - **连接数限制**：全局最大500并发连接，单IP最大50并发连接，防止资源耗尽
 - **空闲超时**：连接空闲超时随机化（4-6分钟），避免固定特征
-- **心跳保活**：每30秒发送心跳帧，携带业务数据伪装
+- **心跳保活**：每30秒发送心跳帧，携带业务数据
 - **优雅关闭**：收到关闭信号后，停止接受新连接，等待现有连接完成后再退出
 
 ## 快速开始
@@ -130,8 +130,7 @@ npm install
 # 开发模式（直接运行源码，便于调试）
 npm run dev
 
-# 生产模式（先构建，再运行构建产物）
-npm run build
+# 生产模式（零依赖，直接运行源码）
 npm start
 
 # 或指定端口和租户令牌
@@ -140,7 +139,7 @@ PORT=8080 TENANT_ID=your-tenant-token npm run dev
 
 服务默认监听 `3000` 端口，访问 `http://localhost:3000` 打开管理控制台。
 
-> **说明**：`npm start` 会自动检查 `dist/` 目录是否存在，不存在则自动运行构建。开发调试推荐使用 `npm run dev` 直接运行源码。
+> **说明**：零依赖项目，`npm start` 直接运行 `src/index.js`，无需构建。开发调试同样使用 `npm run dev`（等价于 `npm start`）。
 
 ### 多入口启动
 
@@ -162,7 +161,7 @@ node main.js --port 8080 --env production
 
 ### Docker 部署
 
-详见下方「部署 -> Docker 部署」章节，包含 Dockerfile 多阶段构建、docker-compose 编排、健康检查等完整说明。
+详见下方「部署 -> Docker 部署」章节，包含 Dockerfile 单阶段构建、docker-compose 编排、健康检查等完整说明。
 
 ## 部署
 
@@ -172,12 +171,12 @@ node main.js --port 8080 --env production
 
 | 配置项 | 推荐值 | 说明 |
 |--------|--------|------|
-| **Build Command** | `npm run build` | 复制源码到 `dist/`（零依赖，无需安装包） |
-| **Start Command** | `npm start` | 运行 `dist/index.js`（构建产物） |
+| **Build Command** | （可选）`npm run build` | 零依赖项目，可跳过构建直接启动 |
+| **Start Command** | `npm start` | 直接运行 `src/index.js`（零依赖，无需构建） |
 | **Root Directory** | `./` | 项目根目录 |
 | **Node Version** | `20.x` 或 `18.x` | 推荐 Node.js 20 |
 
-> **兜底机制**：即使平台不运行 Build Command，`npm start` 的 `prestart` 钩子会自动检查 `dist/` 是否存在，不存在则自动运行构建。因此 Start Command 设为 `npm start` 即可兼容所有平台。
+> **零依赖设计**：本项目无需安装任何依赖，无需构建步骤，`npm start` 直接运行源码。Start Command 设为 `npm start` 即可兼容所有平台。
 
 **必选环境变量**：
 
@@ -187,14 +186,14 @@ node main.js --port 8080 --env production
 | `PORT` | 服务端口（大多数 PaaS 自动注入，无需手动设置） |
 
 对于任何支持 Node.js 的 PaaS 平台：
-1. 设置 **Build Command** 为 `npm run build`
+1. （可选）设置 **Build Command** 为 `npm run build`，或留空（零依赖项目可跳过构建）
 2. 设置 **Start Command** 为 `npm start`
 3. 设置环境变量 `TENANT_ID`
 4. 确保平台安装了 Node.js 18+
 
 ### Docker 部署
 
-项目已提供完整的 Docker 多阶段构建配置。
+项目已提供完整的 Docker 单阶段构建配置（零依赖，直接运行源码）。
 
 **使用 Dockerfile 构建运行**：
 
@@ -225,11 +224,11 @@ docker-compose down
 ```
 
 Docker 镜像特性：
-- 多阶段构建（builder + runtime）
-- 生产环境 `--omit=dev`，仅含运行时依赖
+- 单阶段构建，零依赖，无需 `npm install`
+- 直接运行源码，无需构建步骤
 - 非 root 用户运行（`appuser`）
-- 内置健康检查（`/readyz`）
-- 零依赖构建，无需安装 devDependencies
+- 内置健康检查（`/health`）
+- 镜像体积小，启动快
 
 
 ## 配置
@@ -611,9 +610,9 @@ GET /api/v1/auth/device/{tenant_token}
 ## 项目结构
 
 ```
-├── Dockerfile              # 容器构建配置（多阶段构建，生产环境）
+├── Dockerfile              # 容器构建配置（单阶段，零依赖，直接运行源码）
 ├── docker-compose.yml      # Docker Compose 编排（主服务，资源限制+健康检查）
-├── build.js                # 生产构建脚本（零依赖纯复制）
+├── build.js                # 可选构建脚本（纯复制到 dist/，默认不需要）
 ├── server.js               # 服务端入口（平台检测+环境变量加载）
 ├── app.js                  # 应用入口（SyncFlowApp 类，编程式启动）
 ├── main.js                 # 主程序入口（命令行参数解析）

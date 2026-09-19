@@ -94,6 +94,14 @@ function renderInventory(res) {
     </div>
 
     <script>
+        function safeNum(val, decimals) {
+            const n = Number(val);
+            if (!isFinite(n)) return '0';
+            return decimals !== undefined ? n.toFixed(decimals) : n.toLocaleString();
+        }
+        function safeStr(val) {
+            return val == null ? '' : String(val);
+        }
         fetch('/api/v1/inventory?limit=20')
             .then(r => r.json())
             .then(data => {

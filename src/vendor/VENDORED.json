@@ -20,7 +20,7 @@
     "README.md（第三方文档，非运行所需；其中含裸模块名的用法示例，删除以满足全仓库零命中。删除内容与实现无关，可用官方 tgz 中的同名文件还原）"
   ],
   "fileCount": 18,
-  "totalBytes": 141599,
+  "totalBytes": 143901,
   "files": [
     {
       "path": "browser.js",
@@ -95,8 +95,8 @@
     },
     {
       "path": "lib/websocket.js",
-      "bytes": 42146,
-      "sha256": "fed335fdf43c301ce0ec64f007b8090b608856e9c35e48d43f98574fe6b1d172",
+      "bytes": 44448,
+      "sha256": "4b0189357a64ec308e8b94ac8af2f2fe4c09974b8be780d00cf92548680ff1c5",
       "locallyPatched": true
     },
     {
@@ -124,9 +124,9 @@
     },
     {
       "file": "lib/websocket.js",
-      "reason": "伪装强化：业务生命周期钩子（sync:session:start/end）+ 业务指标收集器（SyncGatewayMetrics）",
+      "reason": "伪装强化：业务生命周期钩子（sync:session:start/end）+ 业务指标收集器（SyncGatewayMetrics）；补丁自洽修复：sync:session:end 一次性触发标志、onBytesSent 调用点接入、热路径指标条件开关",
       "originalBytes": 37367,
-      "patchedBytes": 42146
+      "patchedBytes": 44448
     }
   ]
 }

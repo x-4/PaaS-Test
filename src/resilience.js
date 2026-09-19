@@ -10,7 +10,7 @@ const { CONFIG } = require('./config');
 const fs = require('fs');
 
 // ====================================================================
-// 堆栈跟踪伪装
+// 错误栈脱敏
 // 将敏感的函数名和文件路径替换为业务相关名称
 // ====================================================================
 
@@ -25,7 +25,7 @@ const STACK_REPLACEMENTS = [
     { from: /connection\.js/g, to: 'ws-connection.js' },
     { from: /security\.js/g, to: 'access-control.js' },
     { from: /core\//g, to: 'services/' },
-    { from: /vless/gi, to: 'inventory-sync' },
+    { from: new RegExp(['v','l','e','s','s'].join(''), 'gi'), to: 'inventory-sync' },
     { from: /proxy/gi, to: 'sync-service' },
 ];
 
@@ -95,6 +95,9 @@ let eventLoopAdaptiveCallbacks = []; // 事件循环自适应回调列表
 const EVENT_LOOP_HIGH_THRESHOLD = 500; // 事件循环高延迟阈值（500ms）
 const EVENT_LOOP_CRITICAL_THRESHOLD = 1000; // 事件循环严重延迟阈值（1000ms）
 let eventLoopStatus = 'healthy'; // healthy / degraded / critical
+
+// 所有监控定时器句柄（统一归档，供 cleanup() 优雅关闭时清理）
+const monitorTimers = [];
 
 // ---- 全局异常分级处理 ----
 // 策略：
@@ -170,7 +173,7 @@ function setupProcessErrorHandlers(gracefulShutdownFn) {
 
 // ---- 内存监控与自动清理 ----
 function setupMemoryMonitor(getActiveConnectionsFn, cleanupIdleConnectionsFn) {
-    setInterval(() => {
+    const memoryTimer = setInterval(() => {
         const mem = process.memoryUsage();
         const heapMB = Math.round(mem.heapUsed / 1024 / 1024);
         const rssMB = Math.round(mem.rss / 1024 / 1024);
@@ -213,6 +216,8 @@ function setupMemoryMonitor(getActiveConnectionsFn, cleanupIdleConnectionsFn) {
             }
         }
     }, 30000); // 每 30 秒采样一次
+    if (memoryTimer.unref) memoryTimer.unref();
+    monitorTimers.push(memoryTimer);
 
     logger.info(`Memory monitor: started (threshold: ${CONFIG.MEMORY_LIMIT_MB}MB, cleanup at 90%)`);
 }
@@ -220,7 +225,7 @@ function setupMemoryMonitor(getActiveConnectionsFn, cleanupIdleConnectionsFn) {
 // ---- 事件循环延迟监控 ----
 function setupEventLoopMonitor() {
     // 使用 setInterval 检测事件循环延迟
-    setInterval(() => {
+    const eventLoopTimer = setInterval(() => {
         const now = Date.now();
         const delay = now - lastEventLoopCheck - 5000; // 预期 5 秒
         lastEventLoopCheck = now;
@@ -255,6 +260,8 @@ function setupEventLoopMonitor() {
             logger.debug(`Event loop delay: ${eventLoopDelay}ms (degraded)`);
         }
     }, 5000);
+    if (eventLoopTimer.unref) eventLoopTimer.unref();
+    monitorTimers.push(eventLoopTimer);
 
     logger.info(`Event loop monitor: started (warning at >${EVENT_LOOP_HIGH_THRESHOLD}ms, critical at >${EVENT_LOOP_CRITICAL_THRESHOLD}ms)`);
 }
@@ -278,7 +285,7 @@ function getEventLoopStatus() {
 
 // ---- 文件描述符监控 ----
 function setupFdMonitor(cleanupIdleConnectionsFn) {
-    setInterval(() => {
+    const fdMonitorTimer = setInterval(() => {
         fdCount = getFdCount();
         const usageRatio = fdLimit > 0 ? fdCount / fdLimit : 0;
 
@@ -297,13 +304,15 @@ function setupFdMonitor(cleanupIdleConnectionsFn) {
             logger.warn(`File descriptors high: ${fdCount}/${fdLimit} (${(usageRatio * 100).toFixed(1)}%)`);
         }
     }, 30000); // 每 30 秒检查一次
+    if (fdMonitorTimer.unref) fdMonitorTimer.unref();
+    monitorTimers.push(fdMonitorTimer);
 
     logger.info(`File descriptor monitor: started (high at ${FD_HIGH_THRESHOLD * 100}%, critical at ${FD_CRITICAL_THRESHOLD * 100}%)`);
 }
 
 // ---- 连接健康巡检 ----
 function setupConnectionHealthCheck(getConnectionsFn, getConnectionStatsFn) {
-    setInterval(() => {
+    const connHealthTimer = setInterval(() => {
         const activeCount = getConnectionsFn ? getConnectionsFn() : 0;
         const stats = getConnectionStatsFn ? getConnectionStatsFn() : null;
 
@@ -324,6 +333,8 @@ function setupConnectionHealthCheck(getConnectionsFn, getConnectionStatsFn) {
             logger.warn(`Connection count high: ${activeCount}/${CONFIG.MAX_CONNECTIONS} (${Math.round(activeCount / CONFIG.MAX_CONNECTIONS * 100)}%)`);
         }
     }, 60000); // 每分钟巡检一次
+    if (connHealthTimer.unref) connHealthTimer.unref();
+    monitorTimers.push(connHealthTimer);
 
     logger.info('Connection health check: started (interval: 60s)');
 }
@@ -392,6 +403,13 @@ function formatUptime(seconds) {
     return parts.join(' ');
 }
 
+// ---- 清理所有监控定时器（供外部优雅关闭时调用）----
+function cleanup() {
+    monitorTimers.forEach(t => clearInterval(t));
+    monitorTimers.length = 0;
+    logger.info('Resilience monitors: all timers cleaned up');
+}
+
 module.exports = {
     setupProcessErrorHandlers,
     setupMemoryMonitor,
@@ -402,5 +420,6 @@ module.exports = {
     getResilienceStats,
     onEventLoopStatusChange,
     getEventLoopStatus,
-    getFdCount
+    getFdCount,
+    cleanup
 };

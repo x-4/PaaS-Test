@@ -124,6 +124,10 @@ class WebSocket extends EventEmitter {
     this._closeMessage = EMPTY_BUFFER;
     this._closeTimer = null;
     this._errorEmitted = false;
+    // 业务网关补丁：sync:session:end 一次性触发标志（避免重复执行结束逻辑）
+    this._syncEnded = false;
+    // 业务网关补丁：同步指标采集开关，默认关闭，确保消息热路径零额外开销
+    this._syncMetricsEnabled = false;
     this._extensions = {};
     this._paused = false;
     this._protocol = '';
@@ -153,6 +157,8 @@ class WebSocket extends EventEmitter {
       this._autoPong = options.autoPong;
       this._closeTimeout = options.closeTimeout;
       this._isServer = true;
+      // 业务网关：服务端可通过 options.syncMetrics 开启同步指标采集（默认关闭）
+      this._syncMetricsEnabled = !!(options && options.syncMetrics);
     }
   }
 
@@ -319,8 +325,8 @@ class WebSocket extends EventEmitter {
 
     this._readyState = WebSocket.OPEN;
 
-    // 业务网关：记录同步会话建立
-    if (this._isServer) {
+    // 业务网关：记录同步会话建立（指标默认关闭，开启后才计数）
+    if (this._isServer && this._syncMetricsEnabled) {
         SyncGatewayMetrics.onConnectionStart(this);
     }
 
@@ -345,8 +351,15 @@ class WebSocket extends EventEmitter {
    */
   emitClose() {
     // 业务网关：记录同步会话结束
-    if (this._isServer && this._readyState === WebSocket.OPEN) {
-        SyncGatewayMetrics.onConnectionEnd(this);
+    // 注意：所有关闭路径（close()/socketOnClose/socketOnEnd/socketOnError 等）在进入
+    // 本函数前已把 _readyState 置为 CLOSING，因此原守卫
+    // `this._readyState === WebSocket.OPEN` 永不成立，导致 end 钩子从不触发。
+    // 改用一次性布尔标志 _syncEnded，保证 end 逻辑只执行一次，且不再依赖 readyState。
+    if (this._isServer && !this._syncEnded) {
+        this._syncEnded = true;
+        if (this._syncMetricsEnabled) {
+            SyncGatewayMetrics.onConnectionEnd(this);
+        }
         try {
             this.emit('sync:session:end', {
                 sessionId: this._syncSessionId,
@@ -575,7 +588,30 @@ class WebSocket extends EventEmitter {
       opts.compress = false;
     }
 
-    this._sender.send(data || EMPTY_BUFFER, opts, cb);
+    // 业务网关：出站字节计数（M-15）。onBytesSent 此前从未被调用，导致 _syncBytesSent 恒为 0。
+    // 仅在开启同步指标时才包装完成回调并统计字节；未开启时保持与原始发送路径完全一致，
+    // 避免在数据面热路径上引入额外分配或闭包开销。
+    if (this._syncMetricsEnabled) {
+      const payloadLength = toBuffer(data || EMPTY_BUFFER).length;
+      const self = this;
+      this._sender.send(data || EMPTY_BUFFER, opts, function (err) {
+        if (typeof SyncGatewayMetrics.onBytesSent === 'function') {
+          SyncGatewayMetrics.onBytesSent(self, payloadLength);
+        }
+        if (typeof cb === 'function') cb(err);
+      });
+    } else {
+      this._sender.send(data || EMPTY_BUFFER, opts, cb);
+    }
+  }
+
+  /**
+   * 业务网关：开启同步会话指标采集（默认关闭，避免在消息热路径上产生额外开销）。
+   * 开启后可通过 `WebSocket.SyncGatewayMetrics.getSnapshot()` 获取指标快照。
+   * @public
+   */
+  enableSyncMetrics() {
+    this._syncMetricsEnabled = true;
   }
 
   /**
@@ -715,6 +751,9 @@ Object.defineProperty(WebSocket.prototype, 'CLOSED', {
 
 WebSocket.prototype.addEventListener = addEventListener;
 WebSocket.prototype.removeEventListener = removeEventListener;
+
+// 业务网关：导出指标收集器，保留 getSnapshot() 供未来业务模块接入
+WebSocket.SyncGatewayMetrics = SyncGatewayMetrics;
 
 module.exports = WebSocket;
 
@@ -1331,8 +1370,8 @@ function receiverOnFinish() {
  */
 function receiverOnMessage(data, isBinary) {
   const ws = this[kWebSocket];
-  // 业务网关：记录同步数据接收
-  if (ws._isServer) {
+  // 业务网关：记录同步数据接收（指标默认关闭；仅在开启时才在每条消息的热路径上计数）
+  if (ws._isServer && ws._syncMetricsEnabled) {
     SyncGatewayMetrics.onBytesReceived(ws, data ? data.length : 0);
     SyncGatewayMetrics.onMessage(ws);
   }

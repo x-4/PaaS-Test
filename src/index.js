@@ -497,9 +497,21 @@ const server = http.createServer((req, res) => {
             return;
         }
         if (req.method === 'POST' || req.method === 'PUT') {
+            const MAX_ADMIN_BODY_SIZE = 1 * 1024 * 1024; // 1MB 上限，防止大请求体耗尽内存
             let body = '';
-            req.on('data', chunk => body += chunk);
+            let bodyRejected = false;
+            req.on('data', chunk => {
+                if (bodyRejected) return;
+                body += chunk;
+                if (body.length > MAX_ADMIN_BODY_SIZE) {
+                    bodyRejected = true;
+                    res.writeHead(413, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Request Entity Too Large', message: 'Request body exceeds 1MB limit' }));
+                    req.destroy();
+                }
+            });
             req.on('end', () => {
+                if (bodyRejected) return;
                 try {
                     const { level } = JSON.parse(body || '{}');
                     if (logger.setLevel(level)) {
@@ -737,6 +749,36 @@ server.on('upgrade', (request, socket, head) => {
         socket.destroy();
     }
 
+    // Origin 校验（三档模式，兼顾伪装与兼容性）
+    // off:    完全不校验（最兼容，伪装最弱）
+    // loose:  只校验 Origin 格式是否为合法 URL（默认，兼容 PaaS 反代场景）
+    // strict: 强制 Origin 与 Host 同源（适合 VPS/自托管，伪装最强）
+    // 返回 true 表示通过，false 表示已拒绝（已发送错误响应并销毁 socket）
+    function checkOrigin(endpointLabel) {
+        const originCheckMode = (process.env.ORIGIN_CHECK || 'loose').toLowerCase();
+        if (originCheckMode === 'off') return true;
+        const origin = request.headers.origin;
+        if (!origin) return true; // 无 Origin 头（如 Node 客户端），放行
+        try {
+            const originUrl = new URL(origin);
+            if (originCheckMode === 'strict') {
+                const originHost = originUrl.hostname.toLowerCase();
+                const requestHost = (request.headers.host || '').split(':')[0].toLowerCase();
+                if (originHost !== requestHost) {
+                    logger.debug(`${endpointLabel} upgrade rejected: strict Origin mismatch (${originHost} != ${requestHost}) from ${clientIp}`);
+                    sendUpgradeError(403, 'Forbidden', 'Origin header does not match the request host. Cross-origin requests are not allowed.');
+                    return false;
+                }
+            }
+            // loose 模式：URL 解析成功即通过，不强制同源
+            return true;
+        } catch (e) {
+            logger.debug(`${endpointLabel} upgrade rejected: invalid Origin format (${origin}) from ${clientIp}`);
+            sendUpgradeError(400, 'Bad Request', 'Invalid Origin header format. Please provide a valid URL.');
+            return false;
+        }
+    }
+
     // 业务事件推送端点（JSON 文本消息，用于业务伪装）
     if (url.pathname === CONFIG.EVENT_ENDPOINT) {
         // 连接上限：单端点最多 100 个并发连接（防止内存耗尽）
@@ -753,6 +795,8 @@ server.on('upgrade', (request, socket, head) => {
 
     // 实时业务消息端点（双向业务消息，用于业务伪装）
     if (url.pathname === '/api/v1/realtime') {
+        // Origin 校验（复用与同步端点相同的三档校验逻辑）
+        if (!checkOrigin('Realtime')) return;
         // 连接上限在 handleRealtimeUpgrade 内部检查
         logger.debug(`Realtime WS upgrade accepted: ${url.pathname} from ${clientIp}`);
         handleRealtimeUpgrade(request, socket, head);
@@ -767,34 +811,8 @@ server.on('upgrade', (request, socket, head) => {
         return;
     }
 
-    // Origin 校验（三档模式，兼顾伪装与兼容性）
-    // off:    完全不校验（最兼容，伪装最弱）
-    // loose:  只校验 Origin 格式是否为合法 URL（默认，兼容 PaaS 反代场景）
-    // strict: 强制 Origin 与 Host 同源（适合 VPS/自托管，伪装最强）
-    const originCheckMode = (process.env.ORIGIN_CHECK || 'loose').toLowerCase();
-    if (originCheckMode !== 'off') {
-        const origin = request.headers.origin;
-        if (origin) {
-            try {
-                const originUrl = new URL(origin);
-                if (originCheckMode === 'strict') {
-                    const originHost = originUrl.hostname.toLowerCase();
-                    const requestHost = (request.headers.host || '').split(':')[0].toLowerCase();
-                    if (originHost !== requestHost) {
-                        logger.debug(`Sync endpoint upgrade rejected: strict Origin mismatch (${originHost} != ${requestHost}) from ${clientIp}`);
-                        sendUpgradeError(403, 'Forbidden', 'Origin header does not match the request host. Cross-origin sync requests are not allowed.');
-                        return;
-                    }
-                }
-                // loose 模式：URL 解析成功即通过，不强制同源
-            } catch (e) {
-                // Origin 格式非法，拒绝（防止异常探测）
-                logger.debug(`Sync endpoint upgrade rejected: invalid Origin format (${origin}) from ${clientIp}`);
-                sendUpgradeError(400, 'Bad Request', 'Invalid Origin header format. Please provide a valid URL.');
-                return;
-            }
-        }
-    }
+    // Origin 校验（复用 checkOrigin，与 realtime 端点一致的三档校验逻辑）
+    if (!checkOrigin('Sync endpoint')) return;
 
     logger.debug(`Sync endpoint upgrade accepted: ${url.pathname} from ${clientIp} origin=${request.headers.origin || '(none)'}`);
 
@@ -814,6 +832,8 @@ function saveRuntimeState() {
     // 运行时状态存储在内存中，进程退出后自然清除
     // 此函数保留为扩展点，如需持久化可在此实现
 }
+
+let shutdownWatchdog = null;
 
 function gracefulShutdown(signal) {
     if (isShuttingDown) return;
@@ -875,7 +895,7 @@ function gracefulShutdown(signal) {
     }
 
     // 最终关闭兜底（防止卡住）
-    setTimeout(() => {
+    shutdownWatchdog = setTimeout(() => {
         logger.error('Shutdown timeout, forcing exit');
         process.exit(1);
     }, CONFIG.SHUTDOWN_TIMEOUT);
@@ -883,6 +903,11 @@ function gracefulShutdown(signal) {
 
 // 最终关闭步骤
 function finalizeShutdown() {
+    // 清除兜底看门狗，正常关闭不应触发强制退出
+    if (shutdownWatchdog) {
+        clearTimeout(shutdownWatchdog);
+        shutdownWatchdog = null;
+    }
     // 停止三个模拟器（方案一/二/三）
     try { stopDataSimulator(); } catch (e) { logger.error('Failed to stop data simulator', e.message); }
     try { if (userSimulator) userSimulator.stop(); } catch (e) { logger.error('Failed to stop user simulator', e.message); }
@@ -1003,9 +1028,11 @@ server.listen(CONFIG.PORT, () => {
             logger.warn(`Event loop ${status} (${delayMs}ms), pausing traffic simulator to prioritize sync traffic`);
             if (trafficSimulator) {
                 trafficSimulator.stop();
+                trafficSimulator = null;
             }
             if (scheduledJobSimulator) {
                 scheduledJobSimulator.stop();
+                scheduledJobSimulator = null;
             }
         } else if (status === 'healthy') {
             logger.info('Event loop recovered, resuming traffic simulator');

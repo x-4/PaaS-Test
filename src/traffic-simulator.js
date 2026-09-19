@@ -2,7 +2,7 @@
 // 业务流量模拟器
 // 定时发起内部 HTTP 请求，模拟正常业务访问模式
 // 包含：单次随机请求 + 用户会话模拟 + POST/PUT/DELETE + Cookie/CSRF
-// 避免平台监控发现"只有 WebSocket、没有 HTTP 请求"的异常流量特征
+// 保持 HTTP 与 WebSocket 访问比例自然，符合常规业务系统流量形态
 // ====================================================================
 
 const http = require('http');
@@ -255,7 +255,7 @@ function calculateAdaptiveInterval(type) {
     const table = INTERVAL_TABLE[type] || INTERVAL_TABLE.single;
     const interval = table[trafficLevel] || table[0];
     const baseInterval = interval.min + Math.random() * (interval.max - interval.min);
-    // 乘以流量控制器降频系数（配额/VLESS流量自适应）
+    // 乘以流量控制器降频系数（配额/上游流量自适应）
     const throttleFactor = trafficController.getThrottleFactor();
     return baseInterval / Math.max(0.1, throttleFactor);
 }
@@ -358,7 +358,7 @@ async function executeUserSession(port, session) {
 
 // ---- 业务事件流连接模拟 ----
 // 定期建立到 /api/v1/events 的 WebSocket 连接，接收业务推送，保持一段时间后断开
-// 用于业务伪装：让 WS 流量不只是二进制同步数据，还有 JSON 业务事件流
+// 用于业务数据携带：让 WS 流量同时包含二进制同步数据与 JSON 业务事件流
 const EVENT_STREAM_UAS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',

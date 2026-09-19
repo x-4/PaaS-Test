@@ -60,6 +60,14 @@ class CircuitRecord {
             this.openedAt = Date.now();
             logger.warn(`Circuit opened for ${this.target} after ${this.failureCount} failures`);
         }
+
+        // 半开状态探测失败，重新打开熔断器（防止永久卡在 HALF_OPEN）
+        if (this.state === CircuitState.HALF_OPEN) {
+            this.state = CircuitState.OPEN;
+            this.openedAt = Date.now();
+            this.halfOpenRequests = 0;
+            logger.warn(`Circuit re-opened for ${this.target} after half-open probe failure`);
+        }
     }
 
     /**
@@ -202,9 +210,18 @@ class CircuitBreaker {
     cleanup(maxAgeMs = 10 * 60 * 1000) {
         const now = Date.now();
         let cleaned = 0;
+        // OPEN/HALF_OPEN 记录的最大存活时间：3 倍恢复超时
+        const maxOpenAgeMs = 3 * CircuitConfig.RECOVERY_TIMEOUT_MS;
         for (const [target, record] of this.records) {
-            const lastActivity = Math.max(record.lastFailureAt || 0, record.lastSuccessAt || 0);
-            if (now - lastActivity > maxAgeMs && record.state === CircuitState.CLOSED) {
+            if (record.state === CircuitState.CLOSED) {
+                // CLOSED 记录：原有清理逻辑不变
+                const lastActivity = Math.max(record.lastFailureAt || 0, record.lastSuccessAt || 0);
+                if (now - lastActivity > maxAgeMs) {
+                    this.records.delete(target);
+                    cleaned++;
+                }
+            } else if (record.openedAt && now - record.openedAt > maxOpenAgeMs) {
+                // OPEN/HALF_OPEN 记录：对端长期不可达时清理，防止内存泄漏
                 this.records.delete(target);
                 cleaned++;
             }
@@ -310,8 +327,17 @@ function getCircuitBreakerDetail() {
  * 获取重试统计（兼容旧接口）
  */
 function getRetryStats() {
+    // 聚合所有记录的成功/失败计数
+    let retrySuccesses = 0;
+    let retryFailures = 0;
+    for (const record of circuitBreaker.records.values()) {
+        retrySuccesses += record.totalSuccesses || 0;
+        retryFailures += record.totalFailures || 0;
+    }
     return {
         totalRetries: circuitBreaker.globalStats.totalRetries,
+        retrySuccesses,
+        retryFailures,
         maxRetries: CircuitConfig.MAX_RETRIES,
         baseDelayMs: CircuitConfig.RETRY_DELAY_BASE_MS
     };

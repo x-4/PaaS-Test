@@ -3,6 +3,12 @@
 // SyncFlow 企业库存同步平台 - 实时同步配置
 // ====================================================================
 
+// 解析可选整数环境变量："0" 为合法值，仅当解析结果为 NaN 时回退默认值
+const intOr = (raw, def) => {
+    const v = parseInt(raw, 10);
+    return Number.isFinite(v) ? v : def;
+};
+
 module.exports = {
     // 实时同步端点路径（WebSocket）
     STREAM_ENDPOINTS: [
@@ -28,11 +34,11 @@ module.exports = {
     FIRST_BYTE_TIMEOUT_MS: parseInt(process.env.FIRST_BYTE_TIMEOUT_MS, 10) || 10000,
 
     // 重试配置
-    MAX_RETRIES: parseInt(process.env.MAX_RETRIES, 10) || 2,
+    MAX_RETRIES: intOr(process.env.MAX_RETRIES, 2),
     RETRY_DELAY_BASE_MS: parseInt(process.env.RETRY_DELAY_BASE_MS, 10) || 150,
 
     // 熔断配置
-    CB_THRESHOLD: parseInt(process.env.CB_THRESHOLD, 10) || 5,
+    CB_THRESHOLD: intOr(process.env.CB_THRESHOLD, 5),
     CB_TIMEOUT_MS: parseInt(process.env.CB_TIMEOUT_MS, 10) || 30000,
     CB_HALF_OPEN_MAX: parseInt(process.env.CB_HALF_OPEN_MAX, 10) || 1,
 

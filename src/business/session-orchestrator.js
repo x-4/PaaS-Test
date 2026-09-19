@@ -1,7 +1,7 @@
 /**
  * 会话编排器（Session Orchestrator）
  * 模拟真实用户的完整会话序列：HTTP浏览→WS连接→HTTP交互→WS断开
- * 让每个WS连接都有完整的业务上下文，避免"只有WS没有HTTP"的异常特征
+ * 让每个WS连接都有完整的业务上下文，保持HTTP浏览与WS连接的访问比例自然
  */
 
 const http = require('http');

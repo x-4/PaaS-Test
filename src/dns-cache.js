@@ -147,27 +147,47 @@ class DnsCacheService {
 
     /**
      * 带超时的DNS解析
+     * 优先 dns.resolve4（c-ares），失败回退 dns.lookup（系统 resolver）。
+     * 两个阶段各自受独立超时保护，避免 DNS 服务器无响应时永久挂起。
      */
     _resolveWithTimeout(host) {
         return new Promise((resolve, reject) => {
-            const timer = setTimeout(() => {
-                reject(new Error('DNS resolution timeout'));
+            let settled = false;
+            let timer = null;
+
+            // 统一收尾：防止重复 settle，并清理定时器
+            const done = (fn, arg) => {
+                if (settled) return;
+                settled = true;
+                if (timer) clearTimeout(timer);
+                fn(arg);
+            };
+
+            // 第一阶段：dns.resolve4 超时
+            timer = setTimeout(() => {
+                done(reject, new Error('DNS resolution timeout'));
             }, this.resolveTimeoutMs);
 
             // 优先使用 dns.resolve4（c-ares，绕过系统resolver，更快）
             dns.resolve4(host, (err, addresses) => {
-                clearTimeout(timer);
                 if (err) {
-                    // 回退到 dns.lookup（系统resolver，更兼容）
+                    // 回退到 dns.lookup（系统resolver，更兼容）。
+                    // 重新计时，给 lookup 分支独立的超时保护，
+                    // 否则 DNS 服务器无响应时该分支会永久挂起。
+                    clearTimeout(timer);
+                    timer = setTimeout(() => {
+                        done(reject, new Error('DNS lookup timeout'));
+                    }, this.resolveTimeoutMs);
+
                     dns.lookup(host, (lookupErr, address) => {
                         if (lookupErr) {
-                            reject(lookupErr);
+                            done(reject, lookupErr);
                         } else {
-                            resolve([address]);
+                            done(resolve, [address]);
                         }
                     });
                 } else {
-                    resolve(addresses);
+                    done(resolve, addresses);
                 }
             });
         });

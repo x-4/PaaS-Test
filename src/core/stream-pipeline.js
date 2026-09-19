@@ -115,6 +115,12 @@ class DataPipeline {
             highWaterMark: CONFIG.BACKPRESSURE_HIGH_WATER || 1024 * 1024,
             lowWaterMark: CONFIG.BACKPRESSURE_LOW_WATER || 256 * 1024
         });
+        // 背压恢复时，恢复上游 TCP 数据流
+        this.backpressure.onResume = () => {
+            if (this.outbound && this.outbound.socket) {
+                try { this.outbound.socket.resume(); } catch (e) {}
+            }
+        };
         this.backpressure.start();
 
         // 发送首帧载荷（在 connect 回调中立即写入）
@@ -140,10 +146,15 @@ class DataPipeline {
             this.stats.bytesFromTarget += chunk.length;
             if (this.session) this.session.recordOutbound(chunk.length);
 
-            // 完全透传：直接 ws.send
-            if (this.ws.readyState === 1) {
-                this.ws.send(chunk);
+            if (this.ws.readyState !== 1) return;
+
+            // 背压检查：WS 缓冲区压力过高时暂停上游读取，等待排水后恢复
+            if (this.backpressure && !this.backpressure.canSend()) {
+                try { socket.pause(); } catch (e) {}
             }
+
+            // 完全透传：直接 ws.send（当前 chunk 已从 TCP 读取，必须发送不可丢失）
+            this.ws.send(chunk);
         });
 
         // 上游关闭
@@ -240,10 +251,10 @@ class DataPipeline {
             return;
         }
 
-        // 正在重试：缓冲数据
-        if (this.isRetrying) {
+        // 连接未建立（首次连接或重试中）：统一缓冲数据，防止静默丢弃
+        if (!this.targetConnected) {
             if (!this.retryBuffer.push(data)) {
-                logger.warn(`Retry buffer overflow, closing: ${maskAddress(this.targetHost)}`);
+                logger.warn(`Buffer overflow during connection setup, closing: ${maskAddress(this.targetHost)}`);
                 this._cleanup();
             }
         }

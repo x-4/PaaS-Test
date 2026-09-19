@@ -293,10 +293,12 @@ function createConnectionServer() {
             closeSyncSession(ws, 'connection-cleanup');
 
             // 断开原因伪装：发送业务风格的关闭帧
+            let closeSent = false;
             if (closeReason || ws.readyState === 1) {
                 const reason = closeReason || generateBusinessCloseReason();
                 try {
                     ws.close(reason.code, reason.reason);
+                    closeSent = true;
                 } catch (e) {}
             }
 
@@ -310,7 +312,15 @@ function createConnectionServer() {
             ws.connectionStartTime = 0;
             ws.idleTimeout = 0;
 
-            try { ws.terminate(); } catch (e) {}
+            // 兜底终止：若已发送关闭帧，延迟 200ms 再 terminate，确保 close 帧有机会送达对端；
+            // 若未发送关闭帧（连接已非 OPEN 状态），立即 terminate 清理
+            if (closeSent) {
+                setTimeout(() => {
+                    try { ws.terminate(); } catch (e) {}
+                }, 200);
+            } else {
+                try { ws.terminate(); } catch (e) {}
+            }
         }
 
         // ---- 数据帧处理（通过门面处理，核心功能被门面包裹）----

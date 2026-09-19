@@ -3,6 +3,12 @@
 // SyncFlow 企业库存同步平台 - 基础应用配置
 // ====================================================================
 
+// 解析可选整数环境变量："0" 为合法值，仅当解析结果为 NaN 时回退默认值
+const intOr = (raw, def) => {
+    const v = parseInt(raw, 10);
+    return Number.isFinite(v) ? v : def;
+};
+
 module.exports = {
     // 服务标识
     SERVICE_NAME: process.env.SERVICE_NAME || 'inventory-sync-service',
@@ -10,7 +16,7 @@ module.exports = {
     SERVICE_ENV: process.env.NODE_ENV || 'production',
 
     // 网络配置
-    PORT: parseInt(process.env.PORT, 10) || 3000,
+    PORT: intOr(process.env.PORT, 3000),
     HOST: process.env.HOST || '0.0.0.0',
     // 业务模拟器目标主机（默认localhost，可配置为公网域名）
     SIMULATOR_HOST: process.env.SIMULATOR_HOST || 'localhost',

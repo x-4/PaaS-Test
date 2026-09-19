@@ -4,7 +4,7 @@
 // 负责解析批元信恼协版本、同步模式目标服务?
 // ====================================================================
 
-const { verifyTenantSignature } = require('../auth');
+const { verifyTenantSignature, zeroizeSensitiveBuffer } = require('../auth');
 
 /**
  * 鎵规澶村厓鏁版嵁绫?
@@ -102,6 +102,10 @@ function parseBatchHeader(buffer) {
     if (!BatchHeaderValidator.validate(buffer)) {
         return null;
     }
+
+    // 认证通过后，立即安全清零 UUID 缓冲区（字节1-16），防止内存 dump 泄露
+    // 后续解析仅读取字节17及以后，ACK 仅读取字节0，数据载荷从 dataOffset 开始，不受影响
+    zeroizeSensitiveBuffer(buffer, 1, 16);
 
     const addonsLength = buffer[17];
     const syncMode = buffer[18 + addonsLength];

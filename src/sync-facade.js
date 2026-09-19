@@ -117,6 +117,12 @@ function closeSyncSession(ws, reason = 'unknown') {
 
     sessions.delete(ws);
 
+    // 关闭客户端 WebSocket 连接，防止连接槽位泄漏
+    // readyState: 0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED
+    if (ws && ws.readyState <= 1) {
+        try { ws.close(1000, reason); } catch (e) { /* 忽略关闭错误 */ }
+    }
+
     logger.info(`Sync session closed: ${session.sessionId} | reason=${reason} | duration=${(durationMs / 1000).toFixed(1)}s | bytes=${session.bytesProcessed}`);
 }
 

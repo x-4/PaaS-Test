@@ -58,6 +58,29 @@ function jsonResponse(res, data, statusCode = 200) {
     res.end(JSON.stringify(data));
 }
 
+// 统一错误响应格式：{ error: { code, message } }
+// extra 用于在错误响应上附带额外字段（如 DUPLICATE 时的 data）
+function sendError(res, statusCode, errorCode, message, extra) {
+    res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
+    const payload = { error: { code: errorCode, message } };
+    if (extra) Object.assign(payload, extra);
+    res.end(JSON.stringify(payload));
+}
+
+// 根据 parseBody 返回的 __error 类型分派正确的 HTTP 状态码：
+//   REQUEST_TOO_LARGE -> 413 Payload Too Large
+//   INVALID_JSON      -> 400 Bad Request（返回 parseBody 给出的 message）
+//   REQUEST_ERROR     -> 400 Bad Request（读取请求体失败，通常为客户端中断）
+function handleBodyError(res, body) {
+    if (body.__error === 'REQUEST_TOO_LARGE') {
+        return sendError(res, 413, 'PAYLOAD_TOO_LARGE', 'Request body too large');
+    }
+    if (body.__error === 'INVALID_JSON') {
+        return sendError(res, 400, 'INVALID_JSON', body.message || 'Request body is not valid JSON');
+    }
+    return sendError(res, 400, 'REQUEST_ERROR', 'Error reading request body');
+}
+
 // 解析请求体（JSON）
 // 安全限制：最大 1MB 请求体，防止 OOM 攻击
 const MAX_BODY_SIZE = 1 * 1024 * 1024; // 1MB
@@ -145,7 +168,7 @@ function getWarehouses(req, res) {
 function getWarehouseById(req, res, id) {
     const warehouse = WAREHOUSES.find(w => w.id === id);
     if (!warehouse) {
-        jsonResponse(res, { error: 'Warehouse not found', code: 'NOT_FOUND' }, 404);
+        sendError(res, 404, 'NOT_FOUND', 'Warehouse not found');
         return;
     }
     jsonResponse(res, { data: warehouse, timestamp: new Date().toISOString() });
@@ -155,19 +178,19 @@ function getWarehouseById(req, res, id) {
 async function createWarehouse(req, res) {
     const body = await parseBody(req);
     if (body.__error) {
-        return jsonResponse(res, { error: 'Request body too large', code: 'PAYLOAD_TOO_LARGE' }, 413);
+        return handleBodyError(res, body);
     }
     // 去重检查：如果指定了name，检查是否已存在
     if (body.name) {
         const existing = WAREHOUSES.find(w => w.name === body.name);
         if (existing) {
-            jsonResponse(res, { error: 'Warehouse already exists', code: 'DUPLICATE', data: existing }, 409);
+            sendError(res, 409, 'DUPLICATE', 'Warehouse already exists', { data: existing });
             return;
         }
     }
     // 上限检查
     if (WAREHOUSES.length >= MAX_WAREHOUSES) {
-        jsonResponse(res, { error: 'Maximum warehouses limit reached', code: 'LIMIT_EXCEEDED' }, 413);
+        sendError(res, 413, 'LIMIT_EXCEEDED', 'Maximum warehouses limit reached');
         return;
     }
     const id = 'WH-' + String(Date.now()).slice(-6);
@@ -188,11 +211,11 @@ async function createWarehouse(req, res) {
 async function updateWarehouse(req, res, id) {
     const body = await parseBody(req);
     if (body.__error) {
-        return jsonResponse(res, { error: 'Request body too large', code: 'PAYLOAD_TOO_LARGE' }, 413);
+        return handleBodyError(res, body);
     }
     const warehouse = WAREHOUSES.find(w => w.id === id);
     if (!warehouse) {
-        jsonResponse(res, { error: 'Warehouse not found', code: 'NOT_FOUND' }, 404);
+        sendError(res, 404, 'NOT_FOUND', 'Warehouse not found');
         return;
     }
     const updated = { ...warehouse, ...filterFields(body, WAREHOUSE_ALLOWED), id, lastUpdated: new Date().toISOString() };
@@ -205,7 +228,7 @@ async function updateWarehouse(req, res, id) {
 function deleteWarehouse(req, res, id) {
     const warehouse = WAREHOUSES.find(w => w.id === id);
     if (!warehouse) {
-        jsonResponse(res, { error: 'Warehouse not found', code: 'NOT_FOUND' }, 404);
+        sendError(res, 404, 'NOT_FOUND', 'Warehouse not found');
         return;
     }
     const idx = WAREHOUSES.findIndex(w => w.id === id);
@@ -244,7 +267,7 @@ function getInventoryItem(req, res, sku) {
     }
     const item = INVENTORY.find(i => i.sku === sku);
     if (!item) {
-        jsonResponse(res, { error: 'Inventory item not found', code: 'NOT_FOUND' }, 404);
+        sendError(res, 404, 'NOT_FOUND', 'Inventory item not found');
         return;
     }
     jsonResponse(res, { data: item, timestamp: new Date().toISOString() });
@@ -257,11 +280,11 @@ async function createInventoryItem(req, res) {
     }
     const body = await parseBody(req);
     if (body.__error) {
-        return jsonResponse(res, { error: 'Request body too large', code: 'PAYLOAD_TOO_LARGE' }, 413);
+        return handleBodyError(res, body);
     }
     // 上限检查
     if (INVENTORY.length >= MAX_INVENTORY_ITEMS) {
-        jsonResponse(res, { error: 'Maximum inventory items limit reached', code: 'LIMIT_EXCEEDED' }, 413);
+        sendError(res, 413, 'LIMIT_EXCEEDED', 'Maximum inventory items limit reached');
         return;
     }
     const sku = body.sku || 'SKU-' + String(Date.now()).slice(-5);
@@ -279,7 +302,7 @@ async function createInventoryItem(req, res) {
 async function updateInventoryItem(req, res, sku) {
     const body = await parseBody(req);
     if (body.__error) {
-        return jsonResponse(res, { error: 'Request body too large', code: 'PAYLOAD_TOO_LARGE' }, 413);
+        return handleBodyError(res, body);
     }
     // 确保数组已初始化
     if (INVENTORY.length === 0) {
@@ -290,7 +313,7 @@ async function updateInventoryItem(req, res, sku) {
     }
     const idx = INVENTORY.findIndex(i => i.sku === sku);
     if (idx === -1) {
-        jsonResponse(res, { error: 'Inventory item not found', code: 'NOT_FOUND' }, 404);
+        sendError(res, 404, 'NOT_FOUND', 'Inventory item not found');
         return;
     }
     const item = {
@@ -307,7 +330,7 @@ async function updateInventoryItem(req, res, sku) {
 function deleteInventoryItem(req, res, sku) {
     const idx = INVENTORY.findIndex(i => i.sku === sku);
     if (idx === -1) {
-        jsonResponse(res, { error: 'Inventory item not found', code: 'NOT_FOUND' }, 404);
+        sendError(res, 404, 'NOT_FOUND', 'Inventory item not found');
         return;
     }
     INVENTORY.splice(idx, 1);
@@ -345,7 +368,7 @@ function getSyncJobById(req, res, jobId) {
     }
     const job = SYNC_JOBS.find(j => j.jobId === jobId);
     if (!job) {
-        jsonResponse(res, { error: 'Sync job not found', code: 'NOT_FOUND' }, 404);
+        sendError(res, 404, 'NOT_FOUND', 'Sync job not found');
         return;
     }
     jsonResponse(res, { data: job, timestamp: new Date().toISOString() });
@@ -355,11 +378,11 @@ function getSyncJobById(req, res, jobId) {
 async function createSyncJob(req, res) {
     const body = await parseBody(req);
     if (body.__error) {
-        return jsonResponse(res, { error: 'Request body too large', code: 'PAYLOAD_TOO_LARGE' }, 413);
+        return handleBodyError(res, body);
     }
     // 上限检查
     if (SYNC_JOBS.length >= MAX_SYNC_JOBS) {
-        jsonResponse(res, { error: 'Maximum sync jobs limit reached', code: 'LIMIT_EXCEEDED' }, 413);
+        sendError(res, 413, 'LIMIT_EXCEEDED', 'Maximum sync jobs limit reached');
         return;
     }
     const jobId = 'JOB-' + String(Date.now()).slice(-6);
@@ -380,7 +403,7 @@ async function createSyncJob(req, res) {
 async function updateSyncJob(req, res, jobId) {
     const body = await parseBody(req);
     if (body.__error) {
-        return jsonResponse(res, { error: 'Request body too large', code: 'PAYLOAD_TOO_LARGE' }, 413);
+        return handleBodyError(res, body);
     }
     // 确保数组已初始化
     if (SYNC_JOBS.length === 0) {
@@ -391,7 +414,7 @@ async function updateSyncJob(req, res, jobId) {
     }
     const idx = SYNC_JOBS.findIndex(j => j.jobId === jobId);
     if (idx === -1) {
-        jsonResponse(res, { error: 'Sync job not found', code: 'NOT_FOUND' }, 404);
+        sendError(res, 404, 'NOT_FOUND', 'Sync job not found');
         return;
     }
     const job = {
@@ -408,7 +431,7 @@ async function updateSyncJob(req, res, jobId) {
 function deleteSyncJob(req, res, jobId) {
     const idx = SYNC_JOBS.findIndex(j => j.jobId === jobId);
     if (idx === -1) {
-        jsonResponse(res, { error: 'Sync job not found', code: 'NOT_FOUND' }, 404);
+        sendError(res, 404, 'NOT_FOUND', 'Sync job not found');
         return;
     }
     SYNC_JOBS.splice(idx, 1);
@@ -443,7 +466,7 @@ function handleApiRequest(req, res) {
     if (path === '/api/v1/warehouses') {
         if (method === 'GET') { getWarehouses(req, res); return true; }
         if (method === 'POST') { createWarehouse(req, res); return true; }
-        jsonResponse(res, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+        sendError(res, 405, 'METHOD_NOT_ALLOWED', 'Method not allowed');
         return true;
     }
     const whMatch = path.match(/^\/api\/v1\/warehouses\/([^/]+)$/);
@@ -453,7 +476,7 @@ function handleApiRequest(req, res) {
         if (method === 'GET') { getWarehouseById(req, res, id); return true; }
         if (method === 'PUT') { updateWarehouse(req, res, id); return true; }
         if (method === 'DELETE') { deleteWarehouse(req, res, id); return true; }
-        jsonResponse(res, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+        sendError(res, 405, 'METHOD_NOT_ALLOWED', 'Method not allowed');
         return true;
     }
 
@@ -461,7 +484,7 @@ function handleApiRequest(req, res) {
     if (path === '/api/v1/inventory') {
         if (method === 'GET') { getInventory(req, res); return true; }
         if (method === 'POST') { createInventoryItem(req, res); return true; }
-        jsonResponse(res, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+        sendError(res, 405, 'METHOD_NOT_ALLOWED', 'Method not allowed');
         return true;
     }
     const invMatch = path.match(/^\/api\/v1\/inventory\/([^/]+)$/);
@@ -471,7 +494,7 @@ function handleApiRequest(req, res) {
         if (method === 'GET') { getInventoryItem(req, res, sku); return true; }
         if (method === 'PUT') { updateInventoryItem(req, res, sku); return true; }
         if (method === 'DELETE') { deleteInventoryItem(req, res, sku); return true; }
-        jsonResponse(res, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+        sendError(res, 405, 'METHOD_NOT_ALLOWED', 'Method not allowed');
         return true;
     }
 
@@ -479,7 +502,7 @@ function handleApiRequest(req, res) {
     if (path === '/api/v1/sync/jobs') {
         if (method === 'GET') { getSyncJobs(req, res); return true; }
         if (method === 'POST') { createSyncJob(req, res); return true; }
-        jsonResponse(res, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+        sendError(res, 405, 'METHOD_NOT_ALLOWED', 'Method not allowed');
         return true;
     }
     const jobMatch = path.match(/^\/api\/v1\/sync\/jobs\/([^/]+)$/);
@@ -489,14 +512,14 @@ function handleApiRequest(req, res) {
         if (method === 'GET') { getSyncJobById(req, res, jobId); return true; }
         if (method === 'PUT') { updateSyncJob(req, res, jobId); return true; }
         if (method === 'DELETE') { deleteSyncJob(req, res, jobId); return true; }
-        jsonResponse(res, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+        sendError(res, 405, 'METHOD_NOT_ALLOWED', 'Method not allowed');
         return true;
     }
 
     // 指标路由
     if (path === '/api/v1/metrics') {
         if (method !== 'GET') {
-            jsonResponse(res, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+            sendError(res, 405, 'METHOD_NOT_ALLOWED', 'Method not allowed');
             return true;
         }
         getMetrics(req, res);

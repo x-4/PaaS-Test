@@ -217,7 +217,9 @@ function getDnsCacheStats() {
 const _endpointCacheTimer = setInterval(() => {
     const now = Date.now();
     for (const [key, val] of endpointCache) {
-        if (now - val.time > ENDPOINT_CACHE_TTL) endpointCache.delete(key);
+        // error 条目使用更短的错误 TTL，成功条目使用正常 TTL
+        const ttl = val.error ? ENDPOINT_CACHE_ERROR_TTL : ENDPOINT_CACHE_TTL;
+        if (now - val.time > ttl) endpointCache.delete(key);
     }
 }, 60000);
 if (_endpointCacheTimer.unref) _endpointCacheTimer.unref();
@@ -310,18 +312,47 @@ function isValidIp(ip) {
     return net.isIP(ip) !== 0;
 }
 
-function getClientAddress(req) {
-    // PaaS 平台通常有反向代理，X-Forwarded-For 可信
-    // 但需验证格式，防止恶意输入绕过 IP 封禁
-    const forwarded = req.headers['x-forwarded-for'];
-    if (forwarded) {
-        const firstIp = forwarded.split(',')[0].trim();
-        if (isValidIp(firstIp)) {
-            return firstIp;
-        }
-        // 格式不合法时回退到 socket 地址，避免被伪造
+// 是否启用可信代理（默认关闭，仅当直连 peer 在可信网段时才采信 XFF）
+const TRUST_PROXY = process.env.TRUST_PROXY === 'true';
+// 从 X-Forwarded-For 右侧（最靠近服务端）起算的可信跳数
+const TRUST_PROXY_HOPS = parseInt(process.env.TRUST_PROXY_HOPS, 10) || 1;
+
+// 判断 IP 是否位于可信代理网段（内网/回环）
+// 覆盖 127.0.0.0/8、10.0.0.0/8、172.16.0.0/12、192.168.0.0/16
+function isTrustedProxyIp(ip) {
+    if (!ip || typeof ip !== 'string') return false;
+    // 规范化 IPv4 映射的 IPv6 地址（::ffff:a.b.c.d）
+    let candidate = ip;
+    if (candidate.startsWith('::ffff:')) {
+        candidate = candidate.substring(7);
     }
-    return req.socket.remoteAddress || 'unknown';
+    const m = candidate.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (!m) return false;
+    const a = parseInt(m[1], 10);
+    const b = parseInt(m[2], 10);
+    if (a === 127) return true;                              // 127.0.0.0/8
+    if (a === 10) return true;                               // 10.0.0.0/8
+    if (a === 172 && b >= 16 && b <= 31) return true;        // 172.16.0.0/12
+    if (a === 192 && b === 168) return true;                 // 192.168.0.0/16
+    return false;
+}
+
+function getClientAddress(req) {
+    const peerAddress = req.socket.remoteAddress || '';
+    // 默认不采信 X-Forwarded-For：仅当显式启用 TRUST_PROXY 且直连 peer 在可信网段时
+    // 才从 XFF 头提取客户端 IP，否则一律使用 socket 直连地址，防止伪造绕过限流/黑名单
+    if (TRUST_PROXY && isTrustedProxyIp(peerAddress)) {
+        const forwarded = req.headers['x-forwarded-for'];
+        if (forwarded) {
+            const parts = forwarded.split(',').map(s => s.trim()).filter(Boolean);
+            // 从右侧（最靠近服务端的可信代理）起数 TRUST_PROXY_HOPS 跳
+            const idx = parts.length - TRUST_PROXY_HOPS;
+            if (idx >= 0 && isValidIp(parts[idx])) {
+                return parts[idx];
+            }
+        }
+    }
+    return peerAddress || 'unknown';
 }
 
 module.exports = {
