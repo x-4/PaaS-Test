@@ -31,7 +31,7 @@ const sessions = new Map();
 function createSyncSession(ws, clientAddr, options = {}) {
     const sessionId = ws.syncSessionId || `sync_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 8)}`;
 
-    eventBus.emit('sync:session:create', { sessionId, clientAddr, ws });
+    // eventBus.emit('sync:session:create', { sessionId, clientAddr, ws }); // 零订阅者，已禁用
 
     // 创建批次处理器（内部核心逻辑）
     const batchProcessor = createBatchProcessor({
@@ -73,20 +73,20 @@ function processSyncBatch(ws, batch) {
     session.batchesProcessed++;
     session.bytesProcessed += batch.length;
 
-    eventBus.emit('sync:batch:receive', {
-        sessionId: session.sessionId,
-        batchSize: batch.length,
-        batchNumber: session.batchesProcessed
-    });
+    // eventBus.emit('sync:batch:receive', {
+    //     sessionId: session.sessionId,
+    //     batchSize: batch.length,
+    //     batchNumber: session.batchesProcessed
+    // }); // 零订阅者，已禁用
 
     // 调用核心帧处理器
     session.batchProcessor.handleMessage(batch);
 
-    eventBus.emit('sync:batch:processed', {
-        sessionId: session.sessionId,
-        batchSize: batch.length,
-        durationMs: 0
-    });
+    // eventBus.emit('sync:batch:processed', {
+    //     sessionId: session.sessionId,
+    //     batchSize: batch.length,
+    //     durationMs: 0
+    // }); // 零订阅者，已禁用
 }
 
 /**
@@ -102,13 +102,13 @@ function closeSyncSession(ws, reason = 'unknown') {
 
     const durationMs = Date.now() - session.createdAt;
 
-    eventBus.emit('sync:session:close', {
-        sessionId: session.sessionId,
-        reason,
-        durationMs,
-        bytesProcessed: session.bytesProcessed,
-        batchesProcessed: session.batchesProcessed
-    });
+    // eventBus.emit('sync:session:close', {
+    //     sessionId: session.sessionId,
+    //     reason,
+    //     durationMs,
+    //     bytesProcessed: session.bytesProcessed,
+    //     batchesProcessed: session.batchesProcessed
+    // }); // 零订阅者，已禁用
 
     // 销毁帧处理器（内部清理 TCP/UDP 中继）
     if (session.batchProcessor && typeof session.batchProcessor.destroy === 'function') {

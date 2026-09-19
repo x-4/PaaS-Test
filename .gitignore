@@ -33,3 +33,11 @@ coverage/
 # Temporary
 *.tmp
 *.temp
+
+# Workspace / agent artifacts
+.workbuddy/
+*.pyc
+__pycache__/
+
+# Editor temp files
+*~

@@ -121,7 +121,7 @@ class UpstreamConnection {
             // 连接超时
             this._connectTimer = setTimeout(() => {
                 socket.destroy();
-                reject(new Error('ETIMEDOUT: Connection timed out'));
+                reject(Object.assign(new Error('Connection timed out'), { code: 'ETIMEDOUT' }));
             }, ConnectionConfig.CONNECT_TIMEOUT_MS);
 
             socket.once('connect', () => {

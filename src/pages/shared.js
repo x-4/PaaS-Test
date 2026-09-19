@@ -221,6 +221,7 @@ function layout(title, content, activeNav) {
     <title>${title} | ${PRODUCT_NAME}</title>
     <meta name="description" content="${PRODUCT_TAGLINE}">
     <style>${INLINE_CSS}</style>
+<script>${ESCAPE_HTML_JS}</script>
 </head>
 <body class="bg-slate-50 min-h-screen">
     <!-- Sidebar -->
@@ -348,5 +349,6 @@ module.exports = {
     PRODUCT_VERSION,
     PRODUCT_TAGLINE,
     INLINE_CSS,
+    ESCAPE_HTML_JS,
     layout
 };

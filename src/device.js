@@ -17,7 +17,9 @@ const TEMPLATE_SEGMENTS = [
 ];
 
 function generateDeviceProfile(req, res) {
-    const host = req.headers.host;
+    // 校验Host头格式，防止Host头注入
+    const rawHost = req.headers.host || '';
+    const host = /^[a-zA-Z0-9.\-:\[\]]+$/.test(rawHost) ? rawHost : 'syncflow.example.com';
     const tag = encodeURIComponent('ERP-Sync-Node');
 
     // 组装模板并解码

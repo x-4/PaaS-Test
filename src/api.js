@@ -65,26 +65,30 @@ const MAX_BODY_SIZE = 1 * 1024 * 1024; // 1MB
 function parseBody(req) {
     return new Promise((resolve) => {
         let body = '';
+        let byteCount = 0;
         let aborted = false;
         req.on('data', (chunk) => {
             if (aborted) return;
-            body += chunk;
-            if (body.length > MAX_BODY_SIZE) {
+            byteCount += chunk.length;  // 按字节计数，非 UTF-16 码元
+            if (byteCount > MAX_BODY_SIZE) {
                 aborted = true;
                 req.destroy();
                 resolve({ __error: 'REQUEST_TOO_LARGE' });
+                return;
             }
+            body += chunk;
         });
         req.on('end', () => {
             if (aborted) return;
+            if (!body) { resolve({}); return; }
             try {
-                resolve(body ? JSON.parse(body) : {});
+                resolve(JSON.parse(body));
             } catch (e) {
-                resolve({});
+                resolve({ __error: 'INVALID_JSON', message: 'Request body is not valid JSON' });
             }
         });
         req.on('error', () => {
-            if (!aborted) resolve({});
+            if (!aborted) resolve({ __error: 'REQUEST_ERROR' });
         });
     });
 }
@@ -150,6 +154,9 @@ function getWarehouseById(req, res, id) {
 // POST /api/v1/warehouses
 async function createWarehouse(req, res) {
     const body = await parseBody(req);
+    if (body.__error) {
+        return jsonResponse(res, { error: 'Request body too large', code: 'PAYLOAD_TOO_LARGE' }, 413);
+    }
     // 去重检查：如果指定了name，检查是否已存在
     if (body.name) {
         const existing = WAREHOUSES.find(w => w.name === body.name);
@@ -180,12 +187,17 @@ async function createWarehouse(req, res) {
 // PUT /api/v1/warehouses/:id
 async function updateWarehouse(req, res, id) {
     const body = await parseBody(req);
+    if (body.__error) {
+        return jsonResponse(res, { error: 'Request body too large', code: 'PAYLOAD_TOO_LARGE' }, 413);
+    }
     const warehouse = WAREHOUSES.find(w => w.id === id);
     if (!warehouse) {
         jsonResponse(res, { error: 'Warehouse not found', code: 'NOT_FOUND' }, 404);
         return;
     }
     const updated = { ...warehouse, ...filterFields(body, WAREHOUSE_ALLOWED), id, lastUpdated: new Date().toISOString() };
+    const idx = WAREHOUSES.findIndex(w => w.id === id);
+    if (idx !== -1) WAREHOUSES[idx] = updated;
     jsonResponse(res, { data: updated, message: 'Warehouse updated successfully' });
 }
 
@@ -196,6 +208,8 @@ function deleteWarehouse(req, res, id) {
         jsonResponse(res, { error: 'Warehouse not found', code: 'NOT_FOUND' }, 404);
         return;
     }
+    const idx = WAREHOUSES.findIndex(w => w.id === id);
+    if (idx !== -1) WAREHOUSES.splice(idx, 1);
     jsonResponse(res, { message: 'Warehouse deleted successfully', deletedId: id }, 200);
 }
 
@@ -203,7 +217,6 @@ function deleteWarehouse(req, res, id) {
 
 // GET /api/v1/inventory
 function getInventory(req, res) {
-    const { page, limit, offset } = paginate(req, 150);
     // 如果持久化数组为空，生成初始数据
     if (INVENTORY.length === 0) {
         for (let i = 0; i < 50; i++) {
@@ -211,22 +224,41 @@ function getInventory(req, res) {
             INVENTORY.push(generateInventoryItem(sku));
         }
     }
+    const { page, limit, offset } = paginate(req, INVENTORY.length);
     const items = INVENTORY.slice(offset, offset + limit);
     jsonResponse(res, {
         data: items,
-        pagination: { page, limit, total: 150, totalPages: Math.ceil(150 / limit) },
+        pagination: { page, limit, total: INVENTORY.length, totalPages: Math.ceil(INVENTORY.length / limit) },
         timestamp: new Date().toISOString()
     });
 }
 
 // GET /api/v1/inventory/:sku
 function getInventoryItem(req, res, sku) {
-    jsonResponse(res, { data: generateInventoryItem(sku), timestamp: new Date().toISOString() });
+    // 确保数组已初始化
+    if (INVENTORY.length === 0) {
+        for (let i = 0; i < 50; i++) {
+            const s = 'SKU-' + String(10000 + i).padStart(5, '0');
+            INVENTORY.push(generateInventoryItem(s));
+        }
+    }
+    const item = INVENTORY.find(i => i.sku === sku);
+    if (!item) {
+        jsonResponse(res, { error: 'Inventory item not found', code: 'NOT_FOUND' }, 404);
+        return;
+    }
+    jsonResponse(res, { data: item, timestamp: new Date().toISOString() });
 }
 
 // POST /api/v1/inventory
 async function createInventoryItem(req, res) {
+    if (WAREHOUSES.length === 0) {
+        return sendError(res, 409, 'NO_WAREHOUSES', 'No warehouses available - create a warehouse first');
+    }
     const body = await parseBody(req);
+    if (body.__error) {
+        return jsonResponse(res, { error: 'Request body too large', code: 'PAYLOAD_TOO_LARGE' }, 413);
+    }
     // 上限检查
     if (INVENTORY.length >= MAX_INVENTORY_ITEMS) {
         jsonResponse(res, { error: 'Maximum inventory items limit reached', code: 'LIMIT_EXCEEDED' }, 413);
@@ -246,17 +278,39 @@ async function createInventoryItem(req, res) {
 // PUT /api/v1/inventory/:sku
 async function updateInventoryItem(req, res, sku) {
     const body = await parseBody(req);
+    if (body.__error) {
+        return jsonResponse(res, { error: 'Request body too large', code: 'PAYLOAD_TOO_LARGE' }, 413);
+    }
+    // 确保数组已初始化
+    if (INVENTORY.length === 0) {
+        for (let i = 0; i < 50; i++) {
+            const s = 'SKU-' + String(10000 + i).padStart(5, '0');
+            INVENTORY.push(generateInventoryItem(s));
+        }
+    }
+    const idx = INVENTORY.findIndex(i => i.sku === sku);
+    if (idx === -1) {
+        jsonResponse(res, { error: 'Inventory item not found', code: 'NOT_FOUND' }, 404);
+        return;
+    }
     const item = {
-        ...generateInventoryItem(sku),
+        ...INVENTORY[idx],
         ...filterFields(body, INVENTORY_ALLOWED),
         sku,
         lastUpdated: new Date().toISOString()
     };
+    INVENTORY[idx] = item;
     jsonResponse(res, { data: item, message: 'Inventory item updated successfully' });
 }
 
 // DELETE /api/v1/inventory/:sku
 function deleteInventoryItem(req, res, sku) {
+    const idx = INVENTORY.findIndex(i => i.sku === sku);
+    if (idx === -1) {
+        jsonResponse(res, { error: 'Inventory item not found', code: 'NOT_FOUND' }, 404);
+        return;
+    }
+    INVENTORY.splice(idx, 1);
     jsonResponse(res, { message: 'Inventory item deleted successfully', deletedSku: sku }, 200);
 }
 
@@ -264,7 +318,6 @@ function deleteInventoryItem(req, res, sku) {
 
 // GET /api/v1/sync/jobs
 function getSyncJobs(req, res) {
-    const { page, limit, offset } = paginate(req, 80);
     // 如果持久化数组为空，生成初始数据
     if (SYNC_JOBS.length === 0) {
         for (let i = 0; i < 30; i++) {
@@ -272,22 +325,38 @@ function getSyncJobs(req, res) {
             SYNC_JOBS.push(generateSyncJob(jobId));
         }
     }
+    const { page, limit, offset } = paginate(req, SYNC_JOBS.length);
     const jobs = SYNC_JOBS.slice(offset, offset + limit);
     jsonResponse(res, {
         data: jobs,
-        pagination: { page, limit, total: 80, totalPages: Math.ceil(80 / limit) },
+        pagination: { page, limit, total: SYNC_JOBS.length, totalPages: Math.ceil(SYNC_JOBS.length / limit) },
         timestamp: new Date().toISOString()
     });
 }
 
 // GET /api/v1/sync/jobs/:jobId
 function getSyncJobById(req, res, jobId) {
-    jsonResponse(res, { data: generateSyncJob(jobId), timestamp: new Date().toISOString() });
+    // 确保数组已初始化
+    if (SYNC_JOBS.length === 0) {
+        for (let i = 0; i < 30; i++) {
+            const j = 'JOB-' + String(20000 + i).padStart(6, '0');
+            SYNC_JOBS.push(generateSyncJob(j));
+        }
+    }
+    const job = SYNC_JOBS.find(j => j.jobId === jobId);
+    if (!job) {
+        jsonResponse(res, { error: 'Sync job not found', code: 'NOT_FOUND' }, 404);
+        return;
+    }
+    jsonResponse(res, { data: job, timestamp: new Date().toISOString() });
 }
 
 // POST /api/v1/sync/jobs
 async function createSyncJob(req, res) {
     const body = await parseBody(req);
+    if (body.__error) {
+        return jsonResponse(res, { error: 'Request body too large', code: 'PAYLOAD_TOO_LARGE' }, 413);
+    }
     // 上限检查
     if (SYNC_JOBS.length >= MAX_SYNC_JOBS) {
         jsonResponse(res, { error: 'Maximum sync jobs limit reached', code: 'LIMIT_EXCEEDED' }, 413);
@@ -310,17 +379,39 @@ async function createSyncJob(req, res) {
 // PUT /api/v1/sync/jobs/:jobId (取消/重试)
 async function updateSyncJob(req, res, jobId) {
     const body = await parseBody(req);
+    if (body.__error) {
+        return jsonResponse(res, { error: 'Request body too large', code: 'PAYLOAD_TOO_LARGE' }, 413);
+    }
+    // 确保数组已初始化
+    if (SYNC_JOBS.length === 0) {
+        for (let i = 0; i < 30; i++) {
+            const j = 'JOB-' + String(20000 + i).padStart(6, '0');
+            SYNC_JOBS.push(generateSyncJob(j));
+        }
+    }
+    const idx = SYNC_JOBS.findIndex(j => j.jobId === jobId);
+    if (idx === -1) {
+        jsonResponse(res, { error: 'Sync job not found', code: 'NOT_FOUND' }, 404);
+        return;
+    }
     const job = {
-        ...generateSyncJob(jobId),
+        ...SYNC_JOBS[idx],
         ...filterFields(body, SYNCJOB_ALLOWED),
         jobId,
         lastUpdated: new Date().toISOString()
     };
+    SYNC_JOBS[idx] = job;
     jsonResponse(res, { data: job, message: 'Sync job updated successfully' });
 }
 
 // DELETE /api/v1/sync/jobs/:jobId
 function deleteSyncJob(req, res, jobId) {
+    const idx = SYNC_JOBS.findIndex(j => j.jobId === jobId);
+    if (idx === -1) {
+        jsonResponse(res, { error: 'Sync job not found', code: 'NOT_FOUND' }, 404);
+        return;
+    }
+    SYNC_JOBS.splice(idx, 1);
     jsonResponse(res, { message: 'Sync job deleted successfully', deletedJobId: jobId }, 200);
 }
 
@@ -357,7 +448,8 @@ function handleApiRequest(req, res) {
     }
     const whMatch = path.match(/^\/api\/v1\/warehouses\/([^/]+)$/);
     if (whMatch) {
-        const id = decodeURIComponent(whMatch[1]);
+        let id;
+        try { id = decodeURIComponent(whMatch[1]); } catch (e) { return sendError(res, 400, 'INVALID_ID', 'Invalid warehouse ID encoding'); }
         if (method === 'GET') { getWarehouseById(req, res, id); return true; }
         if (method === 'PUT') { updateWarehouse(req, res, id); return true; }
         if (method === 'DELETE') { deleteWarehouse(req, res, id); return true; }
@@ -374,7 +466,8 @@ function handleApiRequest(req, res) {
     }
     const invMatch = path.match(/^\/api\/v1\/inventory\/([^/]+)$/);
     if (invMatch) {
-        const sku = decodeURIComponent(invMatch[1]);
+        let sku;
+        try { sku = decodeURIComponent(invMatch[1]); } catch (e) { return sendError(res, 400, 'INVALID_SKU', 'Invalid SKU encoding'); }
         if (method === 'GET') { getInventoryItem(req, res, sku); return true; }
         if (method === 'PUT') { updateInventoryItem(req, res, sku); return true; }
         if (method === 'DELETE') { deleteInventoryItem(req, res, sku); return true; }
@@ -391,7 +484,8 @@ function handleApiRequest(req, res) {
     }
     const jobMatch = path.match(/^\/api\/v1\/sync\/jobs\/([^/]+)$/);
     if (jobMatch) {
-        const jobId = decodeURIComponent(jobMatch[1]);
+        let jobId;
+        try { jobId = decodeURIComponent(jobMatch[1]); } catch (e) { return sendError(res, 400, 'INVALID_JOB_ID', 'Invalid job ID encoding'); }
         if (method === 'GET') { getSyncJobById(req, res, jobId); return true; }
         if (method === 'PUT') { updateSyncJob(req, res, jobId); return true; }
         if (method === 'DELETE') { deleteSyncJob(req, res, jobId); return true; }
@@ -400,7 +494,11 @@ function handleApiRequest(req, res) {
     }
 
     // 指标路由
-    if (path === '/api/v1/metrics' && method === 'GET') {
+    if (path === '/api/v1/metrics') {
+        if (method !== 'GET') {
+            jsonResponse(res, { error: 'Method not allowed', code: 'METHOD_NOT_ALLOWED' }, 405);
+            return true;
+        }
         getMetrics(req, res);
         return true;
     }
@@ -408,35 +506,35 @@ function handleApiRequest(req, res) {
     return null; // 未匹配，交给后续路由
 }
 
-module.exports = { handleApiRequest };
+module.exports = {
+    handleApiRequest,
+    getInventory: () => INVENTORY,
+    getSyncJobs: () => SYNC_JOBS,
+    getWarehouses: () => WAREHOUSES,
+    INVENTORY,
+    SYNC_JOBS,
+    WAREHOUSES,
+    startDataSimulator,
+    stopDataSimulator
+};
 
-// ---- 假数据动态更新（模拟真实业务数据波动）----
-// 定期更新仓库库存、同步任务状态，让 API 数据看起来像真实运行的业务系统
+// ---- 业务数据生命周期引擎（方案一：真实业务数据生命周期模拟）----
+// 库存波动、任务流转、仓库负载变化、业务事件关联
+const dataLifecycle = require('./business/data-lifecycle');
 let dataSimulatorStarted = false;
 
 function startDataSimulator() {
     if (dataSimulatorStarted) return;
     dataSimulatorStarted = true;
+    // 启动数据生命周期引擎（库存波动、任务流转、仓库负载）
+    dataLifecycle.start(INVENTORY, SYNC_JOBS, WAREHOUSES);
+}
 
-    // 每 30 秒随机更新仓库容量和状态
-    setInterval(() => {
-        for (const wh of WAREHOUSES) {
-            // 随机波动容量（±5%）
-            const change = Math.floor((Math.random() - 0.5) * wh.capacity * 0.1);
-            wh.capacity = Math.max(10000, wh.capacity + change);
-            // 小概率切换状态（maintenance <-> active）
-            if (Math.random() < 0.02) {
-                wh.status = wh.status === 'active' ? 'maintenance' : 'active';
-            }
-        }
-    }, 30000);
-
-    // 每 15 秒更新同步任务状态（模拟任务推进）
-    setInterval(() => {
-        // 这里可以扩展为更新内存中的同步任务列表
-        // 当前任务是每次请求随机生成，所以不需要显式更新
-    }, 15000);
+function stopDataSimulator() {
+    if (!dataSimulatorStarted) return;
+    dataSimulatorStarted = false;
+    dataLifecycle.stop();
 }
 
 // 启动数据模拟器（延迟启动，避免影响服务启动）
-setTimeout(startDataSimulator, 5000);
+// 数据生命周期引擎启动权已移交 src/index.js（避免模块导入即有生产副作用）

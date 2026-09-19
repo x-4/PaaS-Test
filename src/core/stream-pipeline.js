@@ -75,6 +75,7 @@ class DataPipeline {
             return;
         }
 
+        let socket;
         try {
             this.outbound = new UpstreamConnection({
                 targetHost: this.targetHost,
@@ -82,10 +83,17 @@ class DataPipeline {
                 connectOptions: this.connectOptions
             });
 
-            const socket = await this.outbound.connect();
-            this._onConnected(socket);
+            socket = await this.outbound.connect();
         } catch (err) {
             this._onConnectError(err);
+            return;
+        }
+        try {
+            this._onConnected(socket);
+        } catch (err) {
+            // 连接后编程异常不触发重试，直接关闭管道
+            logger.error(`StreamPipeline _onConnected error: ${err.message}`);
+            this._cleanup();
         }
     }
 

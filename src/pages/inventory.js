@@ -3,6 +3,16 @@
 // SyncFlow - 企业级库存同步平台
 // ====================================================================
 
+// 安全数值处理（防止 null/undefined/非数字导致页面崩溃）
+function safeNum(val, decimals) {
+    const n = Number(val);
+    if (!isFinite(n)) return '0';
+    return decimals !== undefined ? n.toFixed(decimals) : n.toLocaleString();
+}
+function safeStr(val) {
+    return val == null ? '' : String(val);
+}
+
 const { layout } = require('./shared');
 
 function renderInventory(res) {
@@ -95,10 +105,10 @@ function renderInventory(res) {
                         '<td class="px-5 py-3 font-medium text-slate-800">' + escapeHtml(item.name) + '</td>' +
                         '<td class="px-5 py-3 text-slate-600">' + escapeHtml(item.category) + '</td>' +
                         '<td class="px-5 py-3 text-slate-600 text-xs">' + escapeHtml(item.warehouseId) + '</td>' +
-                        '<td class="px-5 py-3 text-right font-medium text-slate-700">' + escapeHtml(item.quantity.toLocaleString()) + '</td>' +
-                        '<td class="px-5 py-3 text-right text-slate-600">$' + escapeHtml(item.unitPrice.toFixed(2)) + '</td>' +
-                        '<td class="px-5 py-3"><span class="px-2 py-0.5 rounded-full text-xs font-semibold ' + statusColor + '">' + escapeHtml(item.status.replace(/_/g, ' ')) + '</span></td>' +
-                        '<td class="px-5 py-3 text-slate-400 text-xs">' + escapeHtml(new Date(item.lastUpdated).toLocaleString()) + '</td>' +
+                        '<td class="px-5 py-3 text-right font-medium text-slate-700">' + safeNum(item.quantity) + '</td>' +
+                        '<td class="px-5 py-3 text-right text-slate-600">$' + safeNum(item.unitPrice, 2) + '</td>' +
+                        '<td class="px-5 py-3"><span class="px-2 py-0.5 rounded-full text-xs font-semibold ' + statusColor + '">' + escapeHtml(safeStr(item.status).replace(/_/g, ' ')) + '</span></td>' +
+                        '<td class="px-5 py-3 text-slate-400 text-xs">' + (item.lastUpdated ? escapeHtml(new Date(item.lastUpdated).toLocaleString()) : '-') + '</td>' +
                     '</tr>';
                 }).join('');
                 document.getElementById('inv-count').textContent = 'Showing ' + data.data.length + ' of ' + data.pagination.total + ' items';

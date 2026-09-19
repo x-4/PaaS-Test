@@ -38,17 +38,17 @@ function renderWarehouses(res) {
                                     '<svg class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>' +
                                 '</div>' +
                                 '<div>' +
-                                    '<h3 class="font-semibold text-slate-800">' + wh.name + '</h3>' +
-                                    '<p class="text-xs text-slate-400">' + wh.city + ', ' + wh.region + '</p>' +
+                                    '<h3 class="font-semibold text-slate-800">' + escapeHtml(wh.name) + '</h3>' +
+                                    '<p class="text-xs text-slate-400">' + escapeHtml(wh.city) + ', ' + escapeHtml(wh.region) + '</p>' +
                                 '</div>' +
                             '</div>' +
                             '<span class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ' + statusColor + '">' +
-                                '<span class="w-1.5 h-1.5 rounded-full ' + statusDot + ' pulse-dot"></span>' + wh.status +
+                                '<span class="w-1.5 h-1.5 rounded-full ' + statusDot + ' pulse-dot"></span>' + escapeHtml(wh.status) +
                             '</span>' +
                         '</div>' +
                         '<div class="space-y-3 text-sm">' +
-                            '<div class="flex justify-between"><span class="text-slate-500">Warehouse ID</span><span class="font-mono text-xs text-slate-600">' + wh.id + '</span></div>' +
-                            '<div class="flex justify-between"><span class="text-slate-500">Capacity</span><span class="text-slate-700 font-medium">' + wh.capacity.toLocaleString() + ' units</span></div>' +
+                            '<div class="flex justify-between"><span class="text-slate-500">Warehouse ID</span><span class="font-mono text-xs text-slate-600">' + escapeHtml(wh.id) + '</span></div>' +
+                            '<div class="flex justify-between"><span class="text-slate-500">Capacity</span><span class="text-slate-700 font-medium">' + (typeof wh.capacity === 'number' ? wh.capacity.toLocaleString() : escapeHtml(String(wh.capacity || 0))) + ' units</span></div>' +
                             '<div>' +
                                 '<div class="flex justify-between text-xs mb-1"><span class="text-slate-500">Utilization</span><span class="text-slate-600 font-medium">' + fillPercent + '%</span></div>' +
                                 '<div class="w-full bg-slate-100 rounded-full h-2"><div class="bg-blue-500 h-2 rounded-full" style="width:' + fillPercent + '%"></div></div>' +

@@ -248,7 +248,16 @@ function handleTraceRequest(req, res) {
     // 诊断端点鉴权（fail-closed：未配置 token 则拒绝访问）
     const debugToken = req.headers['x-debug-token'] || req.headers['x-admin-token'];
     const expectedToken = process.env.DEBUG_TOKEN || process.env.ADMIN_TOKEN;
-    if (!expectedToken || debugToken !== expectedToken) {
+    // 使用恒定时间比较，防止时序侧信道
+    if (!expectedToken || !debugToken) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized', message: 'Invalid or missing debug token' }));
+        return true;
+    }
+    const crypto = require('crypto');
+    const a = Buffer.from(debugToken);
+    const b = Buffer.from(expectedToken);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Unauthorized', message: 'Invalid or missing debug token' }));
         return true;

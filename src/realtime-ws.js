@@ -1,10 +1,10 @@
-// ====================================================================
+﻿// ====================================================================
 // 实时业务消息 WebSocket 端点
-// 用于业务伪装：提供真实的双向业务消息（库存变更、订单更新、同步进度等）
-// 与实时数据同步端点完全分离，不影响核心同步功能
+// 用于业务：提供真实的双向业务消息（库存变更单更新同步进度等）
+// 与实时数据端点完全分离，不影响核心同步功能
 // ====================================================================
 
-const WebSocket = require('ws');
+const WebSocket = require('#socket-runtime');
 const logger = require('./logger');
 
 // 业务消息类型
@@ -23,7 +23,7 @@ const MESSAGE_TYPES = {
 // 订阅频道
 const CHANNELS = ['inventory', 'order', 'sync', 'system', 'warehouse'];
 
-// 模拟数据生成器
+// 模拟数据生成?
 function generateInventoryUpdate() {
     const warehouses = ['WH-BJ-01', 'WH-SH-02', 'WH-GZ-03', 'WH-SZ-04', 'WH-CD-05'];
     const products = ['SKU-' + Math.floor(Math.random() * 9000 + 1000), 'SKU-' + Math.floor(Math.random() * 9000 + 1000)];
@@ -117,7 +117,7 @@ let connectedClients = 0;
 function createRealtimeWebSocketServer() {
     if (wss) return wss;
 
-    wss = new WebSocket.Server({ noServer: true });
+    wss = new WebSocket.Server({ noServer: true, maxPayload: 1 * 1024 * 1024 });  // 1MB 单帧上限
 
     wss.on('connection', (ws, req) => {
         connectedClients++;
@@ -127,7 +127,7 @@ function createRealtimeWebSocketServer() {
         const clientIp = req.socket.remoteAddress || 'unknown';
         logger.debug(`Realtime WS connected: ${clientIp} (total: ${connectedClients})`);
 
-        // 发送欢迎消息
+        // 发迎消?
         ws.send(JSON.stringify({
             type: 'system.connected',
             timestamp: new Date().toISOString(),
@@ -138,7 +138,7 @@ function createRealtimeWebSocketServer() {
             }
         }));
 
-        // 心跳
+        // 蹇冭烦
         ws.on('pong', () => { ws.isAlive = true; });
 
         // 处理客户端消息
@@ -149,28 +149,37 @@ function createRealtimeWebSocketServer() {
                 if (msg.type === MESSAGE_TYPES.PING) {
                     ws.send(JSON.stringify({ type: MESSAGE_TYPES.PONG, timestamp: new Date().toISOString() }));
                 } else if (msg.type === MESSAGE_TYPES.SUBSCRIBE && msg.channel) {
-                    ws.subscriptions.add(msg.channel);
-                    logger.debug(`Realtime WS subscribe: ${msg.channel} from ${clientIp}`);
+                    if (CHANNELS.includes(msg.channel)) {
+                        ws.subscriptions.add(msg.channel);
+                        logger.debug(`Realtime WS subscribe: ${msg.channel} from ${clientIp}`);
+                    }
                 } else if (msg.type === MESSAGE_TYPES.UNSUBSCRIBE && msg.channel) {
                     ws.subscriptions.delete(msg.channel);
                     logger.debug(`Realtime WS unsubscribe: ${msg.channel} from ${clientIp}`);
                 }
             } catch (e) {
-                // 忽略非 JSON 消息
+                // 忽略?JSON 消息
             }
         });
 
+        ws._cleanedUp = false;
         ws.on('close', () => {
-            connectedClients--;
-            logger.debug(`Realtime WS disconnected: ${clientIp} (remaining: ${connectedClients})`);
+            if (!ws._cleanedUp) {
+                ws._cleanedUp = true;
+                connectedClients = Math.max(0, connectedClients - 1);
+                logger.debug(`Realtime WS disconnected: ${clientIp} (remaining: ${connectedClients})`);
+            }
         });
 
         ws.on('error', () => {
-            connectedClients--;
+            if (!ws._cleanedUp) {
+                ws._cleanedUp = true;
+                connectedClients = Math.max(0, connectedClients - 1);
+            }
         });
     });
 
-    // 定期推送业务消息（模拟真实业务流量）
+    // 定期推业务消恼模拟真实业务流量?
     messageInterval = setInterval(() => {
         if (connectedClients === 0) return;
         const generator = generators[Math.floor(Math.random() * generators.length)];
@@ -182,9 +191,9 @@ function createRealtimeWebSocketServer() {
                 client.send(JSON.stringify(message));
             }
         });
-    }, 3000 + Math.random() * 5000); // 3-8 秒随机间隔
+    }, 3000 + Math.random() * 5000); // 3-8 绉掗殢鏈洪棿闅?
 
-    // 心跳检测
+    // 心跳?
     setInterval(() => {
         if (!wss) return;
         wss.clients.forEach((ws) => {
@@ -203,6 +212,11 @@ function createRealtimeWebSocketServer() {
 
 function handleRealtimeUpgrade(request, socket, head) {
     if (!wss) createRealtimeWebSocketServer();
+    // 连接上限：单端点最多 100 个并发连接
+    if (wss.clients && wss.clients.size >= 100) {
+        socket.destroy();
+        return;
+    }
     wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
     });

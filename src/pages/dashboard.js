@@ -329,13 +329,13 @@ function renderDashboard(res) {
                 tbody.innerHTML = data.data.map(job => {
                     const progress = job.status === 'completed' ? 100 : job.progress || Math.floor(Math.random() * 80);
                     return '<tr class="hover:bg-slate-50 transition-colors">' +
-                        '<td class="px-5 py-3 font-mono text-xs text-slate-600">' + job.jobId + '</td>' +
-                        '<td class="px-5 py-3 text-slate-700">' + job.type.replace(/_/g, ' ') + '</td>' +
-                        '<td class="px-5 py-3 text-slate-600 text-xs">' + job.sourceWarehouse + ' &rarr; ' + job.targetWarehouse + '</td>' +
-                        '<td class="px-5 py-3"><span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ' + (statusColors[job.status] || 'bg-slate-100 text-slate-600') + '">' +
-                        (job.status === 'in_progress' ? '<span class="w-1.5 h-1.5 bg-blue-500 rounded-full pulse-dot"></span>' : '') +
-                        job.status.replace(/_/g, ' ') + '</span></td>' +
-                        '<td class="px-5 py-3"><div class="flex items-center gap-2"><div class="w-16 bg-slate-100 rounded-full h-1.5"><div class="' + (barColors[job.status] || 'bg-slate-400') + ' h-1.5 rounded-full" style="width:' + progress + '%"></div></div><span class="text-xs text-slate-500">' + progress + '%</span></div></td>' +
+                        '<td class="px-5 py-3 font-mono text-xs text-slate-600">' + escapeHtml(job.jobId) + '</td>' +
+                        '<td class="px-5 py-3 text-slate-700">' + escapeHtml(job.type).replace(/_/g, ' ') + '</td>' +
+                        '<td class="px-5 py-3 text-slate-600 text-xs">' + escapeHtml(job.sourceWarehouse) + ' &rarr; ' + escapeHtml(job.targetWarehouse) + '</td>' +
+                        '<td class="px-5 py-3"><span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ' + (statusColors[escapeHtml(job.status)] || 'bg-slate-100 text-slate-600') + '">' +
+                        (escapeHtml(job.status) === 'in_progress' ? '<span class="w-1.5 h-1.5 bg-blue-500 rounded-full pulse-dot"></span>' : '') +
+                        escapeHtml(job.status).replace(/_/g, ' ') + '</span></td>' +
+                        '<td class="px-5 py-3"><div class="flex items-center gap-2"><div class="w-16 bg-slate-100 rounded-full h-1.5"><div class="' + (barColors[escapeHtml(job.status)] || 'bg-slate-400') + ' h-1.5 rounded-full" style="width:' + progress + '%"></div></div><span class="text-xs text-slate-500">' + progress + '%</span></div></td>' +
                         '<td class="px-5 py-3 text-slate-600">' + job.recordsProcessed.toLocaleString() + '</td>' +
                     '</tr>';
                 }).join('');

@@ -282,6 +282,10 @@ class InventoryAlertEngine {
         // 如果是警告及以上，加入活跃预警
         if (level !== AlertLevel.NORMAL) {
             this.alerts.push(alert);
+            // 限制告警数组上限
+            if (this.alerts.length > 100) {
+                this.alerts.shift();
+            }
         }
 
         return alert;

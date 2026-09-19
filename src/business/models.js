@@ -240,8 +240,8 @@ class InventoryItem {
  */
 class Order {
     constructor(options = {}) {
+        this.type = options.type || 'sales'; // sales / purchase（必须先赋值，_generateId 依赖它）
         this.id = options.id || this._generateId();
-        this.type = options.type || 'sales'; // sales / purchase
         this.status = options.status || OrderStatus.PENDING;
         this.customerId = options.customerId || '';
         this.warehouseId = options.warehouseId || '';

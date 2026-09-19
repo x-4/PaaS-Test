@@ -7,9 +7,16 @@
 
 const http = require('http');
 const crypto = require('crypto');
-const WebSocket = require('ws');
+const WebSocket = require('#socket-runtime');
 const logger = require('./logger');
 const { getTrafficRate } = require('./connection');
+
+// 业务模拟器目标主机（默认localhost，可通过SIMULATOR_HOST环境变量配置为公网域名）
+const { CONFIG } = require('./config');
+const SIMULATOR_HOST = CONFIG.SIMULATOR_HOST || 'localhost';
+
+// 流量控制器（配额管控+智能降频）
+const trafficController = require('./system/simulator-traffic-controller');
 
 // ---- 请求体生成函数 ----
 function generateInventoryBody() {
@@ -247,7 +254,10 @@ function calculateAdaptiveInterval(type) {
     const { trafficLevel } = getTrafficRate();
     const table = INTERVAL_TABLE[type] || INTERVAL_TABLE.single;
     const interval = table[trafficLevel] || table[0];
-    return interval.min + Math.random() * (interval.max - interval.min);
+    const baseInterval = interval.min + Math.random() * (interval.max - interval.min);
+    // 乘以流量控制器降频系数（配额/VLESS流量自适应）
+    const throttleFactor = trafficController.getThrottleFactor();
+    return baseInterval / Math.max(0.1, throttleFactor);
 }
 
 // 生成会话上下文（Cookie、CSRF Token、User-Agent）
@@ -262,6 +272,8 @@ function createSessionContext() {
 
 // 发起一次模拟请求（支持 GET/POST/PUT/DELETE，带 Cookie/CSRF）
 function simulateRequest(port, endpoint, sessionCtx = null) {
+    // 配额用尽时跳过请求
+    if (trafficController.isPaused()) return;
     const ctx = sessionCtx || createSessionContext();
     const ua = ctx.userAgent;
     const referer = ctx.referer;
@@ -299,7 +311,7 @@ function simulateRequest(port, endpoint, sessionCtx = null) {
     }
 
     const options = {
-        hostname: '127.0.0.1',
+        hostname: SIMULATOR_HOST,
         port,
         path: endpoint.path,
         method: endpoint.method,
@@ -307,7 +319,9 @@ function simulateRequest(port, endpoint, sessionCtx = null) {
     };
 
     const req = http.request(options, (res) => {
-        res.resume();
+        res.on('data', (chunk) => {
+            trafficController.recordBytes(chunk.length);
+        });
         logger.debug(`Traffic sim: ${endpoint.method} ${endpoint.path} -> ${res.statusCode}`);
     });
 
@@ -321,6 +335,7 @@ function simulateRequest(port, endpoint, sessionCtx = null) {
 
     if (bodyData) {
         req.write(bodyData);
+        trafficController.recordBytes(Buffer.byteLength(bodyData));
     }
     req.end();
 }
@@ -351,12 +366,14 @@ const EVENT_STREAM_UAS = [
 ];
 
 function simulateEventStreamConnection(port) {
+    // 配额用尽时跳过
+    if (trafficController.isPaused()) return null;
     const ua = EVENT_STREAM_UAS[Math.floor(Math.random() * EVENT_STREAM_UAS.length)];
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/v1/events`, {
+    const ws = new WebSocket(`ws://${SIMULATOR_HOST}:${port}/api/v1/events`, {
         headers: {
             'User-Agent': ua,
             'Accept': 'text/event-stream, application/json',
-            'Origin': `http://127.0.0.1:${port}`,
+            'Origin': `http://${SIMULATOR_HOST}:${port}`,
         }
     });
 
@@ -377,6 +394,12 @@ function simulateEventStreamConnection(port) {
     });
 
     ws.on('message', (data) => {
+        // 统计回环流量字节数
+        if (Buffer.isBuffer(data)) {
+            trafficController.recordBytes(data.length);
+        } else if (typeof data === 'string') {
+            trafficController.recordBytes(Buffer.byteLength(data));
+        }
         eventCount++;
         if (eventCount <= 2) {
             try {

@@ -152,7 +152,7 @@ function logStartupInfo(config) {
     log('info', 'startup', null, `Max connections: ${config.maxConnections}`);
     log('info', 'startup', null, `Idle timeout: ${config.idleTimeout}ms`);
     log('info', 'startup', null, `Memory limit: ${config.memoryLimitMB}MB`);
-    log('info', 'startup', null, `Tenant ID: ${config.tenantId.substring(0, 8)}... (configured)`);
+    log('info', 'startup', null, 'Tenant: configured (hidden for security)');
     log('info', 'startup', null, '========================');
 }
 

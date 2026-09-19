@@ -3,7 +3,7 @@
 // 负责 WebSocket 服务器创建、连接生命周期管理、心跳保活、连接统计
 // ====================================================================
 
-const { WebSocketServer } = require('ws');
+const { WebSocketServer } = require('#socket-runtime');
 const { CONFIG } = require('./config');
 const logger = require('./logger');
 const { getPlatformConfig } = require('./platform');

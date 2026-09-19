@@ -334,7 +334,7 @@ function configureHttpServerTimeouts(server) {
     server.timeout = 120000;
 
     // Keep-Alive 超时：默认 65 秒（略大于常见负载均衡器的 60 秒）
-    server.keepAliveTimeout = 65000;
+    server.keepAliveTimeout = 55000;  // 必须小于 headersTimeout，避免 Node 连接告警
 
     // 请求头超时：默认 60 秒
     server.headersTimeout = 60000;

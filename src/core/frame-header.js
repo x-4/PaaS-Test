@@ -1,19 +1,19 @@
-// ====================================================================
-// 批次头解析器
-// 企业库存同步协议 - 二进制增量数据批次头解码
-// 负责解析批次元信息：协议版本、同步模式、目标服务端口
+﻿// ====================================================================
+// 鎵规澶磋В鏋愬櫒
+// 企业库存同协 - 二进制量数捉次头解码
+// 负责解析批元信恼协版本、同步模式目标服务?
 // ====================================================================
 
 const { verifyTenantSignature } = require('../auth');
 
 /**
- * 批次头元数据类
- * 封装解析后的批次头信息，提供业务层面的访问接口
+ * 鎵规澶村厓鏁版嵁绫?
+ * 封解析后的批头信恼提供业务层面的闎?
  */
 class BatchHeader {
     constructor(options) {
         this.protocolVersion = options.protocolVersion || 0;
-        this.syncMode = options.syncMode;              // 1=流模式, 2=数据报模式
+        this.syncMode = options.syncMode;              // 1=流模式 2=数据报模式
         this.addrFormat = options.addrFormat;          // 1=IPv4, 3=域名, 4=IPv6
         this.targetPort = options.targetPort;
         this.targetEndpoint = options.targetEndpoint;  // Buffer
@@ -23,35 +23,35 @@ class BatchHeader {
     }
 
     /**
-     * 判断是否为流同步模式（TCP）
+     * 判断昐为流同模式（TCP?
      */
     get isStreamMode() {
         return this.syncMode === 1;
     }
 
     /**
-     * 判断是否为数据报同步模式（UDP）
+     * 判断昐为数捊同模式（UDP?
      */
     get isDatagramMode() {
         return this.syncMode === 2;
     }
 
     /**
-     * 判断目标是否为域名
+     * 鍒ゆ柇鐩爣鏄惁涓哄煙鍚?
      */
     get isHostname() {
         return this.addrFormat === 3;
     }
 
     /**
-     * 获取批次头大小（字节）
+     * 获取批头大小（字节?
      */
     get headerSize() {
         return this.dataOffset;
     }
 
     /**
-     * 转换为业务可读格式（用于日志和监控）
+     * 轍为业务可读格式（用于日志和监控）
      */
     toLogFormat() {
         return {
@@ -65,28 +65,28 @@ class BatchHeader {
 }
 
 /**
- * 批次头校验器
- * 验证批次头的完整性和合法性
+ * 鎵规澶存牎楠屽櫒
+ * 验证批头的完整性和合法?
  */
 class BatchHeaderValidator {
-    static MIN_BATCH_SIZE = 24;  // 最小批次大小（字节）
+    static MIN_BATCH_SIZE = 24;  // 小批次大小（字节?
 
     /**
-     * 校验批次数据是否满足最小长度要求
+     * 校验批数据昐满足小长度?
      */
     static validateSize(buffer) {
         return buffer && buffer.length >= this.MIN_BATCH_SIZE;
     }
 
     /**
-     * 校验租户签名是否有效
+     * 鏍￠獙绉熸埛绛惧悕鏄惁鏈夋晥
      */
     static validateSignature(buffer) {
         return verifyTenantSignature(buffer);
     }
 
     /**
-     * 完整校验：大小 + 签名
+     * 完整校验：大?+ 签名
      */
     static validate(buffer) {
         return this.validateSize(buffer) && this.validateSignature(buffer);
@@ -94,9 +94,9 @@ class BatchHeaderValidator {
 }
 
 /**
- * 解析二进制增量数据批次头
- * @param {Buffer} buffer - 原始批次数据
- * @returns {BatchHeader|null} 解析后的批次头，无效则返回 null
+ * 解析二进制量数捉次头
+ * @param {Buffer} buffer - 鍘熷鎵规鏁版嵁
+ * @returns {BatchHeader|null} 解析后的批头，无效则返?null
  */
 function parseBatchHeader(buffer) {
     if (!BatchHeaderValidator.validate(buffer)) {
@@ -105,13 +105,19 @@ function parseBatchHeader(buffer) {
 
     const addonsLength = buffer[17];
     const syncMode = buffer[18 + addonsLength];
+    // syncMode 枚举校验: 1=TCP流模式，2=UDP数据报模式，其他值拒绝
+    if (syncMode !== 1 && syncMode !== 2) {
+        return null;
+    }
     const targetPort = (buffer[19 + addonsLength] << 8) | buffer[20 + addonsLength];
 
     let addrFormat = buffer[21 + addonsLength];
+    // 线协议地址类型白名单：1=IPv4, 2=域名, 3=IPv6（拒绝 0 和其他无效值）
+    if (addrFormat !== 1 && addrFormat !== 2 && addrFormat !== 3) return null;
     if (addrFormat !== 1) addrFormat += 1;
 
-    // 控制流平坦化：使用 switch 状态机解析地址格式
-    // 避免连续 if/else 链，增加静态分析难度
+    // 控制流平坦化：使?switch 状机解析地址格式
+    // 避免连续 if/else 链，增加静分析难?
     let addrLen = 0;
     let addrOffset = 22 + addonsLength;
     let parseState = 'resolve_format';
@@ -119,9 +125,9 @@ function parseBatchHeader(buffer) {
     while (parseState !== 'done') {
         switch (parseState) {
             case 'resolve_format':
-                // 根据地址格式确定地址长度
+                // 根据地址格式确地址长度
                 switch (addrFormat) {
-                    case 3:  // 域名
+                    case 3:  // 鍩熷悕
                         addrLen = buffer[addrOffset];
                         addrOffset++;
                         parseState = 'validate_offset';
@@ -135,7 +141,7 @@ function parseBatchHeader(buffer) {
                         parseState = 'validate_offset';
                         break;
                     default:
-                        // 未知地址格式，解析失败
+                        // 期地址格式，解析失?
                         parseState = 'fail';
                         break;
                 }
@@ -161,9 +167,14 @@ function parseBatchHeader(buffer) {
 
     const dataOffset = addrOffset + addrLen;
 
-    // 解析扩展元数据（当前仅解析保留，用于未来扩展）
+    // 解析扩展元数捼当前仅解析保留，用于朝扩展?
     const { parseBatchAddons } = require('./addon-parser');
     const addons = addonsLength > 0 ? parseBatchAddons(buffer, 18, addonsLength) : [];
+
+    // 端口范围校验: 1-65535，0为保留口不允许
+    if (targetPort <= 0 || targetPort > 65535) {
+        return null;
+    }
 
     return new BatchHeader({
         protocolVersion: buffer[0],

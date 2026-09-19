@@ -6,12 +6,34 @@
 process.title = 'node inventory-sync-service';
 
 const http = require('http');
+const crypto = require('crypto');
 const zlib = require('zlib');
 const { CONFIG, validateConfig } = require('./config');
 const logger = require('./logger');
+
+/**
+ * 发送 JSON 响应（API 错误处理用）
+ */
+function jsonResponse(res, data, statusCode = 200) {
+    const body = JSON.stringify(data);
+    res.writeHead(statusCode, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Length': Buffer.byteLength(body)
+    });
+    res.end(body);
+}
+
 const { handlePageRequest } = require('./pages');
 const { generateDeviceProfile } = require('./device');
-const { handleApiRequest } = require('./api');
+const { handleApiRequest, startDataSimulator, stopDataSimulator } = require('./api');
+const UserBehaviorSimulator = require('./business/user-simulator');
+let userSimulator = null;
+const fingerprint = require('./system/fingerprint');
+const environmentFingerprint = require('./system/environment-fingerprint');
+const temporalEngine = require('./business/temporal-engine');
+const correlationEngine = require('./business/correlation-engine');
+const { SessionOrchestrator } = require('./business/session-orchestrator');
+let sessionOrchestrator = null;
 const { handleStaticRequest, sendNotFound } = require('./static');
 const { createConnectionServer, getActiveConnectionCount, getConnectionStats, getCircuitBreakerStats, cleanupIdleConnections, healthCheckConnections, shutdownConnections } = require('./connection');
 const { createEventStreamServer } = require('./event-stream');
@@ -31,6 +53,7 @@ const {
 const { detectPlatform, getPlatformConfig } = require('./platform');
 const { destroyTenantKey } = require('./auth');
 const { startTrafficSimulator, startScheduledJobSimulator } = require('./traffic-simulator');
+const simulatorTrafficController = require('./system/simulator-traffic-controller');
 const { getDnsCacheStats } = require('./security');
 const { getRetryStats } = require('./circuit');
 const { getSyncStats } = require('./sync-facade');
@@ -64,8 +87,17 @@ const SERVICE_VERSION = '1.0.0';
 const SERVICE_NAME = 'inventory-sync-service';
 
 // 管理员 Token（用于 /admin/log-level 等管理端点认证）
-// 可通过环境变量 ADMIN_TOKEN 设置，未设置时自动生成并在启动日志中输出
+// 可通过环境变量 ADMIN_TOKEN 设置，未设置时自动生成且不会输出到日志
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || require('crypto').randomBytes(24).toString('hex');
+
+// 恒定时间字符串比较，防止时序侧信道攻击
+function safeCompare(a, b) {
+    if (!a || !b) return false;
+    const bufA = Buffer.from(String(a));
+    const bufB = Buffer.from(String(b));
+    if (bufA.length !== bufB.length) return false;
+    return crypto.timingSafeEqual(bufA, bufB);
+}
 
 function formatUptime(seconds) {
     const d = Math.floor(seconds / 86400);
@@ -405,7 +437,7 @@ const server = http.createServer((req, res) => {
 
     // ---- 企业级安全响应头（模拟真实生产环境）----
     res.setHeader('X-Powered-By', 'Express');
-    res.setHeader('Server', 'nginx');
+    res.setHeader('Server', 'SyncFlow Enterprise Sync Gateway/2.4.1');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'SAMEORIGIN');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
@@ -435,7 +467,14 @@ const server = http.createServer((req, res) => {
     res.setHeader('X-B3-SpanId', res.getHeader('X-Span-ID') || 'unknown');
     res.setHeader('X-B3-Sampled', '1');
 
-    const url = new URL(req.url, `http://${req.headers.host}`);
+    let url;
+    try {
+        url = new URL(req.url, `http://${req.headers.host}`);
+    } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid request URL', code: 'BAD_REQUEST' }));
+        return;
+    }
     const path = url.pathname;
 
     // 统一健康检查（覆盖所有常见 PaaS / K8s / 监控系统端点）
@@ -447,7 +486,7 @@ const server = http.createServer((req, res) => {
     // ---- 管理端点：日志级别动态调整（需要管理员 Token）----
     if (path === '/admin/log-level' || path === '/api/v1/admin/log-level') {
         const adminToken = req.headers['x-admin-token'];
-        if (adminToken !== ADMIN_TOKEN) {
+        if (!safeCompare(adminToken, ADMIN_TOKEN)) {
             res.writeHead(401, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'Unauthorized', message: 'Invalid admin token' }));
             return;
@@ -494,9 +533,16 @@ const server = http.createServer((req, res) => {
     if (path.startsWith('/api/') && !path.startsWith('/api/v1/auth/device/')) {
         const apiDelay = 5 + Math.random() * 75; // 5-80ms 随机延迟
         setTimeout(() => {
-            const apiResult = handleApiRequest(req, res);
-            if (apiResult === null || apiResult === undefined) {
-                return sendNotFound(res);
+            try {
+                const apiResult = handleApiRequest(req, res);
+                if (apiResult === null || apiResult === undefined) {
+                    return sendNotFound(res);
+                }
+            } catch (err) {
+                logger.error('API request handler error', err.message);
+                if (!res.headersSent) {
+                    return jsonResponse(res, { error: 'Internal server error', code: 'INTERNAL_ERROR' }, 500);
+                }
             }
         }, apiDelay);
         return;
@@ -683,7 +729,7 @@ server.on('upgrade', (request, socket, head) => {
         socket.write(`HTTP/1.1 ${statusCode} ${message}\r\n`);
         socket.write(`Content-Type: application/json; charset=utf-8\r\n`);
         socket.write(`Content-Length: ${Buffer.byteLength(body)}\r\n`);
-        socket.write(`Server: nginx\r\n`);
+        socket.write(`Server: SyncFlow Enterprise Sync Gateway/2.4.1\r\n`);
         socket.write(`X-Powered-By: Express\r\n`);
         socket.write(`Connection: close\r\n`);
         socket.write(`\r\n`);
@@ -693,6 +739,11 @@ server.on('upgrade', (request, socket, head) => {
 
     // 业务事件推送端点（JSON 文本消息，用于业务伪装）
     if (url.pathname === CONFIG.EVENT_ENDPOINT) {
+        // 连接上限：单端点最多 100 个并发连接（防止内存耗尽）
+        if (eventStreamServer.clients && eventStreamServer.clients.size >= 100) {
+            socket.destroy();
+            return;
+        }
         logger.debug(`Event stream upgrade accepted: ${url.pathname} from ${clientIp}`);
         eventStreamServer.handleUpgrade(request, socket, head, (ws) => {
             eventStreamServer.emit('connection', ws, request);
@@ -702,6 +753,7 @@ server.on('upgrade', (request, socket, head) => {
 
     // 实时业务消息端点（双向业务消息，用于业务伪装）
     if (url.pathname === '/api/v1/realtime') {
+        // 连接上限在 handleRealtimeUpgrade 内部检查
         logger.debug(`Realtime WS upgrade accepted: ${url.pathname} from ${clientIp}`);
         handleRealtimeUpgrade(request, socket, head);
         return;
@@ -831,6 +883,14 @@ function gracefulShutdown(signal) {
 
 // 最终关闭步骤
 function finalizeShutdown() {
+    // 停止三个模拟器（方案一/二/三）
+    try { stopDataSimulator(); } catch (e) { logger.error('Failed to stop data simulator', e.message); }
+    try { if (userSimulator) userSimulator.stop(); } catch (e) { logger.error('Failed to stop user simulator', e.message); }
+    try { environmentFingerprint.stop(); } catch (e) { logger.error('Failed to stop environment fingerprint', e.message); }
+    try { temporalEngine.stop(); } catch (e) { logger.error('Failed to stop temporal engine', e.message); }
+    try { correlationEngine.stop(); } catch (e) { logger.error('Failed to stop correlation engine', e.message); }
+    try { if (sessionOrchestrator) sessionOrchestrator.stop(); } catch (e) { logger.error('Failed to stop session orchestrator', e.message); }
+    try { fingerprint.stop(); } catch (e) { logger.error('Failed to stop fingerprint simulator', e.message); }
     // 安全销毁租户密钥
     destroyTenantKey();
     logger.info('Graceful shutdown completed');
@@ -854,7 +914,7 @@ server.listen(CONFIG.PORT, () => {
         maxConnections: platformConfig.maxConnections,
         idleTimeout: platformConfig.idleTimeout,
         memoryLimitMB: CONFIG.MEMORY_LIMIT_MB,
-        tenantId: CONFIG.ENTERPRISE_TOKEN
+        tenantConfigured: true
     });
 
     logger.info(`Inventory Sync Service ONLINE | Port: ${CONFIG.PORT}`);
@@ -869,6 +929,35 @@ server.listen(CONFIG.PORT, () => {
         logger.info('Admin token auto-generated (set ADMIN_TOKEN env to override)');
     } else {
         logger.info('Admin token loaded from environment');
+    }
+
+    // ---- 启动业务数据生命周期引擎（方案一：库存波动、任务流转、仓库负载）----
+    try {
+        startDataSimulator();
+    } catch (e) {
+        logger.error('Failed to start data lifecycle engine', e.message);
+    }
+
+    // ---- 启动真实用户行为轨迹模拟器（方案二：多用户、真实UA、正确Referer、会话持续）----
+    try {
+        // 启动流量控制器（配额管控+智能降频）
+        simulatorTrafficController.start();
+        userSimulator = new UserBehaviorSimulator(CONFIG.PORT, CONFIG.SIMULATOR_HOST);
+        userSimulator.start();
+    } catch (e) {
+        logger.error('Failed to start user behavior simulator', e.message);
+    }
+
+    // ---- 启动系统运行指纹模拟器（方案三：数据库连接池、缓存、消息队列、GC、定时任务）----
+    try {
+        fingerprint.start();
+        environmentFingerprint.start();
+        temporalEngine.start();
+        correlationEngine.start();
+        sessionOrchestrator = new SessionOrchestrator(CONFIG.PORT, CONFIG.SIMULATOR_HOST);
+        sessionOrchestrator.start();
+    } catch (e) {
+        logger.error('Failed to start system fingerprint simulator', e.message);
     }
 
     // ---- 优雅启动预热（避免首请求慢）----

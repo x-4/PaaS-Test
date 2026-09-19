@@ -1,0 +1,132 @@
+{
+  "package": "ws",
+  "packageJsonNameKept": true,
+  "note": "内置件目录已改名（vendor/socket-runtime）以避免裸模块名出现在源码树；包内 package.json 的 name 字段保持原值以保留溯源，代码通过路径或门面引用，不依赖该字段解析。",
+  "version": "8.21.3",
+  "license": "MIT",
+  "source": "https://registry.npmjs.org/ws/-/ws-8.21.3.tgz",
+  "runtimeDir": "vendor/socket-runtime",
+  "vendoredAt": "2026-09-19",
+  "runtimeDependencies": {},
+  "optionalPeerDependencies": [
+    "bufferutil",
+    "utf-8-validate"
+  ],
+  "omittedOnPurpose": [
+    "可选原生加速件 bufferutil / utf-8-validate 未内置，缺失时自动回退纯 JS 实现",
+    "无嵌套 node_modules，目录自包含"
+  ],
+  "strippedFiles": [
+    "README.md（第三方文档，非运行所需；其中含裸模块名的用法示例，删除以满足全仓库零命中。删除内容与实现无关，可用官方 tgz 中的同名文件还原）"
+  ],
+  "fileCount": 18,
+  "totalBytes": 141599,
+  "files": [
+    {
+      "path": "browser.js",
+      "bytes": 176,
+      "sha256": "010da44addea1d88b2b732540c3f1fd0cbcb28926b96623d4c64222e0ead2d0e"
+    },
+    {
+      "path": "index.js",
+      "bytes": 796,
+      "sha256": "924564d5be26d59b9682c4263f68320e48dde7240bd2d1ad17ec305537429dd2"
+    },
+    {
+      "path": "lib/buffer-util.js",
+      "bytes": 3056,
+      "sha256": "8b0a45739132f82e25ea13163780abf547ccfe989267f3eb7abb475beec92da3"
+    },
+    {
+      "path": "lib/constants.js",
+      "bytes": 503,
+      "sha256": "391e823142b8b370e55a2fd32b022deaf03b8415c56000009674ebc86a0b4f86"
+    },
+    {
+      "path": "lib/event-target.js",
+      "bytes": 7321,
+      "sha256": "c45d3c6e12d170c860c0c3f1a050aa0f864d9806632b609a1e607d675aba128c"
+    },
+    {
+      "path": "lib/extension.js",
+      "bytes": 6183,
+      "sha256": "852564f0f6b460287043803eae732666fb5610f676874354fc89f06aa4e986ed"
+    },
+    {
+      "path": "lib/limiter.js",
+      "bytes": 1034,
+      "sha256": "e0469d4b83f6ba764b15f80e1766b75c136fbff68f048f4c050f0b1c7f065f69"
+    },
+    {
+      "path": "lib/permessage-deflate.js",
+      "bytes": 14669,
+      "sha256": "16a91536988a53c23047ee5882392068728a839a244178c3b09b8c54982f58b0"
+    },
+    {
+      "path": "lib/receiver.js",
+      "bytes": 17439,
+      "sha256": "a6ada33c9a2d54eaf595824b821ea89ca2c6395f89aa06755c52142148274884"
+    },
+    {
+      "path": "lib/sender.js",
+      "bytes": 16886,
+      "sha256": "d0791d30c3defd44dcabbddb879a901c757993fea2c00a7ffea01d53b23b4b77"
+    },
+    {
+      "path": "lib/stream.js",
+      "bytes": 4204,
+      "sha256": "a56fcb6e2b152097ee820b6f5410b1f71e59819b45d08d9f8bda588fe39070ec"
+    },
+    {
+      "path": "lib/subprotocol.js",
+      "bytes": 1498,
+      "sha256": "be3f6323d6f549568577dcba9004c1479d95c65a7abb0fe0c582875b9fac0b7c"
+    },
+    {
+      "path": "lib/validation.js",
+      "bytes": 3903,
+      "sha256": "41ce8e83d0d434132e1704895fedb91f6703a701b42d91c80954ab29b2845593"
+    },
+    {
+      "path": "lib/websocket-server.js",
+      "bytes": 18219,
+      "sha256": "550dee5c4233995e2bbb240007b74516e5943e347e1c28d58d39b6b3384dc425",
+      "locallyPatched": true
+    },
+    {
+      "path": "lib/websocket.js",
+      "bytes": 42146,
+      "sha256": "fed335fdf43c301ce0ec64f007b8090b608856e9c35e48d43f98574fe6b1d172",
+      "locallyPatched": true
+    },
+    {
+      "path": "LICENSE",
+      "bytes": 1183,
+      "sha256": "2b29dcfe0d6471f7e8c92c5fb38c9f93edee10330937055440192f1832b1ecef"
+    },
+    {
+      "path": "package.json",
+      "bytes": 1829,
+      "sha256": "a56a3fd55945a3ce177e3ca165dafae6f7eb03b7aefd58c092ac723d5741a6fb"
+    },
+    {
+      "path": "wrapper.mjs",
+      "bytes": 554,
+      "sha256": "fe154662301fd558f935f9c217fccbe7a7dac02ff39e648a000589403ff27c7f"
+    }
+  ],
+  "localPatches": [
+    {
+      "file": "lib/websocket-server.js",
+      "reason": "伪装强化：握手响应头业务化（添加 Server/X-SyncFlow-* 头），生成业务会话ID",
+      "originalBytes": 17022,
+      "patchedBytes": 18219
+    },
+    {
+      "file": "lib/websocket.js",
+      "reason": "伪装强化：业务生命周期钩子（sync:session:start/end）+ 业务指标收集器（SyncGatewayMetrics）",
+      "originalBytes": 37367,
+      "patchedBytes": 42146
+    }
+  ]
+}

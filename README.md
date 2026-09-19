@@ -12,7 +12,7 @@
 - **实时数据同步**：WebSocket 长连接，支持流模式（TCP）与数据报模式（UDP）
 - **完整 REST API**：仓库、库存、同步任务的完整 CRUD 操作
 - **多租户认证**：基于租户令牌的帧级身份校验
-- **模块化架构**：核心引擎 16 个细粒度模块 + 业务逻辑 6 个模块 + 页面 10 个模块
+- **模块化架构**：核心引擎 12 个细粒度模块 + 业务逻辑 11 个模块 + 页面 10 个模块 + 系统模拟 3 个模块
 - **业务规则引擎**：库存分配、同步优先级、仓库路由、库存预警、任务调度
 - **业务算法库**：库存周转率、同步延迟分析、ABC 分类、需求预测、安全库存计算
 - **高可用设计**：连接数限制、空闲超时、心跳保活、优雅关闭
@@ -59,10 +59,10 @@
 │  pages/ (10 modules) - Dashboard, Login, Inventory...    │
 ├─────────────────────────────────────────────────────────┤
 │                     业务逻辑层                            │
-│  business/ (6 modules) - Models, Rules, Algorithms...    │
+│  business/ (11 modules) - Models, Rules, Algorithms...   │
 ├─────────────────────────────────────────────────────────┤
 │                     核心引擎层                            │
-│  core/ (16 modules) - Frame, Pipeline, Circuit, Metrics  │
+│  core/ (12 modules) - Frame, Pipeline, Circuit, Metrics  │
 ├─────────────────────────────────────────────────────────┤
 │                     基础设施层                            │
 │  config/, logger, security, resilience, platform         │
@@ -162,142 +162,75 @@ node main.js --port 8080 --env production
 
 ### Docker 部署
 
-```bash
-# 构建镜像
-docker build -t syncflow .
+详见下方「部署 -> Docker 部署」章节，包含 Dockerfile 多阶段构建、docker-compose 编排、健康检查等完整说明。
 
-# 运行容器
-docker run -d \
-  -p 3000:3000 \
-  -e TENANT_ID=your-tenant-token \
-  -e PORT=3000 \
-  --name syncflow \
-  syncflow
-```
+## 部署
 
-## 多平台部署
-
-### 通用配置（所有 PaaS 平台）
+### 通用 PaaS 部署
 
 大多数 PaaS 平台支持手动配置 **Build Command** 和 **Start Command**。推荐配置如下：
 
 | 配置项 | 推荐值 | 说明 |
 |--------|--------|------|
-| **Build Command** | `npm run build` | 安装依赖后用 terser 压缩混淆源码到 `dist/` |
+| **Build Command** | `npm run build` | 用 terser 压缩混淆源码到 `dist/` |
 | **Start Command** | `npm start` | 运行 `dist/index.js`（压缩后代码） |
 | **Root Directory** | `./` | 项目根目录 |
 | **Node Version** | `20.x` 或 `18.x` | 推荐 Node.js 20 |
 
 > **兜底机制**：即使平台不运行 Build Command，`npm start` 的 `prestart` 钩子会自动检查 `dist/` 是否存在，不存在则自动运行构建。因此 Start Command 设为 `npm start` 即可兼容所有平台。
 
-### 环境变量（必选）
+**必选环境变量**：
 
 | 变量 | 说明 |
 |------|------|
-| `TENANT_ID` | 租户身份令牌（UUID 格式），未设置则使用内置默认值 |
+| `TENANT_ID` / `ENTERPRISE_TOKEN` | 租户身份令牌（UUID 格式） |
 | `PORT` | 服务端口（大多数 PaaS 自动注入，无需手动设置） |
 
----
-
-### Vercel
-
-直接导入仓库即可。Vercel 会自动检测 Node.js 项目，运行 `npm run build` 并启动服务。
-
-```bash
-npm i -g vercel
-vercel
-```
-
-**手动配置**（如需要）：
-- Build Command: `npm run build`
-- Output Directory: `dist`
-- Install Command: `npm install`
-
-### Fly.io
-
-```bash
-fly launch
-fly deploy
-```
-
-`fly launch` 会自动检测 Node.js 项目并生成 `fly.toml`。Dockerfile 已配置多阶段构建，自动完成压缩混淆。
-
-**fly.toml 关键配置**：
-```toml
-[build]
-  dockerfile = "Dockerfile"
-
-[env]
-  PORT = "8080"
-  TENANT_ID = "your-tenant-token"
-```
-
-### Render
-
-在 Render 控制台选择 "New Web Service" 并连接仓库。
-
-**手动配置**：
-- **Build Command**: `npm install && npm run build`
-- **Start Command**: `npm start`
-- **Environment**: Node 20
-
-**环境变量**：
-- `TENANT_ID`: your-tenant-token
-
-### Railway
-
-在 Railway 控制台选择 "New Project" → "Deploy from GitHub"。
-
-**手动配置**（Settings → Config）：
-- **Build Command**: `npm run build`
-- **Start Command**: `npm start`
-
-Railway 会自动检测 `package.json` 并安装依赖。
-
-### Heroku
-
-```bash
-heroku create
-heroku config:set TENANT_ID=your-tenant-token
-git push heroku main
-```
-
-Heroku 会自动运行 `npm run build`（如果存在），然后执行 `npm start`。
-
-**Procfile**（如需要）：
-```
-web: npm start
-```
-
-### SnapDeploy
-
-在 SnapDeploy 控制台连接仓库，平台自动检测 Node.js 项目。
-
-**手动配置**（如平台支持自定义启动命令）：
-- **Build Command**: `npm run build`
-- **Start Command**: `npm start`
-
-### Northflank
-
-在 Northflank 创建 Service，选择 "Build and deploy"。
-
-**配置**：
-- **Build Type**: Dockerfile（自动使用项目中的 Dockerfile）
-- **Port**: `3000`（或平台注入的 PORT）
-
-**环境变量**：
-- `TENANT_ID`: your-tenant-token
-
-### 其他 PaaS 平台
-
-对于任何支持 Node.js 的 PaaS 平台，通用配置：
-
+对于任何支持 Node.js 的 PaaS 平台：
 1. 设置 **Build Command** 为 `npm run build`
 2. 设置 **Start Command** 为 `npm start`
 3. 设置环境变量 `TENANT_ID`
 4. 确保平台安装了 Node.js 18+
 
-如果平台不支持自定义 Build Command，只需将 Start Command 设为 `npm start`，`prestart` 钩子会自动完成构建。
+### Docker 部署
+
+项目已提供完整的 Docker 多阶段构建配置。
+
+**使用 Dockerfile 构建运行**：
+
+```bash
+# 构建镜像
+docker build -t syncflow .
+
+# 运行容器
+docker run -d \
+  --name syncflow \
+  -p 3000:3000 \
+  -e TENANT_ID=your-tenant-token \
+  --restart unless-stopped \
+  syncflow
+```
+
+**使用 docker-compose**：
+
+```bash
+# 启动服务
+docker-compose up -d
+
+# 查看日志
+docker-compose logs -f
+
+# 停止服务
+docker-compose down
+```
+
+Docker 镜像特性：
+- 多阶段构建（builder + runtime）
+- 生产环境 `--omit=dev`，仅含运行时依赖
+- 非 root 用户运行（`appuser`）
+- 内置健康检查（`/readyz`）
+- 代码体积压缩 44%（terser 混淆）
+
 
 ## 配置
 
@@ -332,7 +265,7 @@ web: npm start
 | `LOG_LEVEL` | `info` | 日志级别（debug/info/warn/error/trace） |
 | `LOG_FORMAT` | `text` | 日志格式（`text` 人类可读 / `json` 结构化，便于 ELK/Loki 收集） |
 | `LOG_SENSITIVE` | `false` | 敏感日志开关（`true` 时日志中记录完整目标地址，默认脱敏仅显示前3字符） |
-| `ADMIN_TOKEN` | 自动生成 | 管理端点认证令牌（用于 `/admin/log-level` 动态调整日志级别，未设置时启动自动生成并输出到日志） |
+| `ADMIN_TOKEN` | 自动生成 | 管理端点认证令牌（用于 `/admin/log-level` 动态调整日志级别，未设置时启动自动生成且**不会**输出到日志，如需固定请显式设置环境变量） |
 | `EXTRA_SYNC_PATHS` | 空 | 额外的同步端点路径（逗号分隔） |
 
 ## API 文档
@@ -679,7 +612,7 @@ GET /api/v1/auth/device/{tenant_token}
 
 ```
 ├── Dockerfile              # 容器构建配置（多阶段构建，生产环境压缩混淆）
-├── docker-compose.yml      # Docker Compose 编排（主服务+Nginx+Prometheus+Grafana）
+├── docker-compose.yml      # Docker Compose 编排（主服务，资源限制+健康检查）
 ├── build.js                # 生产构建脚本（terser 压缩混淆）
 ├── server.js               # 服务端入口（平台检测+环境变量加载）
 ├── app.js                  # 应用入口（SyncFlowApp 类，编程式启动）
@@ -716,30 +649,42 @@ GET /api/v1/auth/device/{tenant_token}
     ├── sync-facade.js      # 同步服务门面（门面模式，封装核心引擎）
     ├── realtime-ws.js      # 实时业务消息 WebSocket
     ├── tracing.js          # 分布式追踪模块
-    ├── core/               # 核心引擎层（16 个细粒度模块）
-    │   ├── index.js        # 统一导出入口
+    ├── lib/                # 防腐层（Anti-Corruption Layer）
+    │   └── net/
+    │       ├── socket-facade.cjs  # Socket 运行时门面（CJS 绑定点）
+    │       └── socket-facade.mjs  # Socket 运行时门面（ESM 绑定点）
+    ├── vendor/             # 内置运行时（Vendored Runtime，零外部依赖）
+    │   ├── VENDORED.json   # 内置件清单（版本、来源、许可、sha256 校验）
+    │   └── socket-runtime/ # Socket 运行时（纯 JS 实现，18 个文件）
+    ├── core/               # 核心引擎层（12 个细粒度模块）
     │   ├── frame-header.js # 批次头解析器
     │   ├── address-resolver.js # 节点地址解析器
     │   ├── addon-parser.js # 扩展元数据解析器
     │   ├── auth-validator.js # 租户认证验证器
     │   ├── response-builder.js # 批次确认响应构建器
-    │   ├── session-router.js # 同步会话路由器
-    │   ├── outbound-connector.js # 出站连接管理器
+    │   ├── upstream-connector.js # 上游连接管理器
     │   ├── stream-pipeline.js # 数据流管道（核心 TCP 透传）
-    │   ├── datagram-forwarder.js # 数据报转发器（UDP）
+    │   ├── packet-router.js # 数据包路由器（UDP）
     │   ├── buffer-pool.js  # 缓冲区池管理器
     │   ├── backpressure-controller.js # 流量控制器
     │   ├── circuit-breaker.js # 弹性控制器（熔断+重试）
-    │   ├── session-manager.js # 会话管理器
-    │   ├── heartbeat-service.js # 心跳服务
     │   └── metrics-collector.js # 同步指标收集器
-    ├── business/           # 业务逻辑层（6 个模块）
+    ├── business/           # 业务逻辑层（11 个模块）
     │   ├── index.js        # 统一导出入口
     │   ├── constants.js    # 业务常量与枚举（15 种枚举）
     │   ├── models.js       # 业务数据模型（仓库/库存/订单/同步任务）
     │   ├── rules.js        # 业务规则引擎（5 大引擎）
     │   ├── algorithms.js   # 业务算法库（5 大算法）
-    │   └── metrics.js      # 业务指标计算
+    │   ├── metrics.js      # 业务指标计算
+    │   ├── data-lifecycle.js    # 业务数据生命周期模拟（库存波动/任务流转/仓库负载）
+    │   ├── user-simulator.js    # 用户行为轨迹模拟器（真实会话/浏览/操作序列）
+    │   ├── session-orchestrator.js # 会话编排器（多用户并发会话管理）
+    │   ├── temporal-engine.js   # 时间模式引擎（日/周/月业务节律模拟）
+    │   └── correlation-engine.js # 多维度关联引擎（流量-业务-系统指标关联）
+    ├── system/             # 系统运行模拟层（3 个模块）
+    │   ├── fingerprint.js  # 系统指纹模拟器（CPU/内存/磁盘/网络指标伪造）
+    │   ├── environment-fingerprint.js # 环境指纹模拟器（DB/缓存连接探测、进程信息）
+    │   └── simulator-traffic-controller.js # 模拟器流量控制器（智能降频+配额管控）
     └── pages/              # Web 控制台（10 个页面模块）
         ├── index.js        # 路由分发主入口
         ├── shared.js       # 共享布局与内联 CSS
@@ -752,6 +697,22 @@ GET /api/v1/auth/device/{tenant_token}
         ├── docs.js         # API 文档页面
         └── about.js        # 关于页面
 ```
+
+## 测试
+
+项目使用 Node.js 内置测试运行器（`node:test`），零额外依赖。
+
+```bash
+# 运行全部测试
+npm test
+
+# 或直接运行
+node --test
+```
+
+测试覆盖：
+- **核心协议测试**（`test/p0-core.test.js`）：认证签名、帧头解析、SSRF 过滤、IPv6 保留地址、XFF 校验、内置件 sha256 一致性等 16 项
+- **根因修复验证**（`test/r5-p0-root-cause.test.js`）：模块副作用、定时器 unref、回调守卫等 4 项
 
 ## 许可证
 

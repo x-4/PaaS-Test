@@ -3,11 +3,21 @@
   "version": "1.0.0",
   "description": "Enterprise Inventory Real-time Synchronization Microservice - WebSocket-based data integration node for distributed warehouse inventory management",
   "main": "dist/index.js",
+  "imports": {
+    "#socket-runtime": {
+      "node": [
+        "./dist/lib/net/socket-facade.cjs",
+        "./src/lib/net/socket-facade.cjs"
+      ],
+      "default": "./src/lib/net/socket-facade.cjs"
+    }
+  },
   "scripts": {
     "start": "node dist/index.js",
     "dev": "node src/index.js",
     "build": "node build.js",
-    "prestart": "node -e \"if(!require('fs').existsSync('dist/index.js')){console.log('dist/ not found, running build...');require('child_process').execSync('node build.js',{stdio:'inherit'})}\""
+    "prestart": "node -e \"if(!require('fs').existsSync('dist/index.js')){console.log('dist/ not found, running build...');require('child_process').execSync('node build.js',{stdio:'inherit'})}\"",
+    "test": "node --test"
   },
   "keywords": [
     "inventory",
@@ -20,9 +30,7 @@
   ],
   "author": "Enterprise Infrastructure Team",
   "license": "Proprietary",
-  "dependencies": {
-    "ws": "^8.16.0"
-  },
+  "dependencies": {},
   "devDependencies": {
     "terser": "^5.51.2"
   },

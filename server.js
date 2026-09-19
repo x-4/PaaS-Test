@@ -14,14 +14,7 @@
 // 进程名伪装：API服务进程
 process.title = 'node inventory-sync-api';
 
-// 加载环境变量（如果存在 .env 文件）
-try {
-    require('fs').accessSync('.env');
-    require('dotenv').config();
-} catch (e) {
-    // 无 .env 文件，使用系统环境变量
-}
-
+// 配置通过平台环境变量注入（PaaS 标准方式）
 const logger = require('./src/logger');
 const { detectPlatform } = require('./src/platform');
 

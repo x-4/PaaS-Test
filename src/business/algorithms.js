@@ -67,7 +67,7 @@ class InventoryTurnoverCalculator {
         const annualizedCogs = cogs * (365 / days);
 
         return {
-            turnoverRate: annualizedCogs / avgInventory.averageValue,
+            turnoverRate: avgInventory.averageValue > 0 ? annualizedCogs / avgInventory.averageValue : 0,
             cogs,
             averageInventoryValue: avgInventory.averageValue,
             periodDays: days

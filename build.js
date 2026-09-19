@@ -23,6 +23,10 @@ function getJsFiles(dir) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         const fullPath = path.join(dir, entry.name);
         if (entry.isDirectory()) {
+            // 跳过vendor目录（内置运行时，不需要压缩）
+            if (entry.name === 'vendor' || entry.name === 'lib') {
+                continue;
+            }
             files.push(...getJsFiles(fullPath));
         } else if (entry.name.endsWith('.js')) {
             files.push(fullPath);
@@ -108,6 +112,46 @@ async function build() {
             }
         }
         console.log('  ✓ config/ directory copied (' + configCount + ' files)');
+    }
+
+    // 复制 vendor/ 目录到 dist/（第三方内置件，直接复制不压缩）
+    const VENDOR_SRC = path.join(SRC_DIR, 'vendor');
+    const VENDOR_DIST = path.join(DIST_DIR, 'vendor');
+    if (fs.existsSync(VENDOR_SRC)) {
+        function copyDir(src, dst) {
+            fs.mkdirSync(dst, { recursive: true });
+            for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+                const srcPath = path.join(src, entry.name);
+                const dstPath = path.join(dst, entry.name);
+                if (entry.isDirectory()) {
+                    copyDir(srcPath, dstPath);
+                } else {
+                    fs.copyFileSync(srcPath, dstPath);
+                }
+            }
+        }
+        copyDir(VENDOR_SRC, VENDOR_DIST);
+        console.log('  ✓ vendor/ directory copied (socket-runtime vendored)');
+    }
+
+    // 复制 lib/ 目录到 dist/（防腐层门面，直接复制确保路径正确）
+    const LIB_SRC = path.join(SRC_DIR, 'lib');
+    const LIB_DIST = path.join(DIST_DIR, 'lib');
+    if (fs.existsSync(LIB_SRC)) {
+        function copyLibDir(src, dst) {
+            fs.mkdirSync(dst, { recursive: true });
+            for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+                const srcPath = path.join(src, entry.name);
+                const dstPath = path.join(dst, entry.name);
+                if (entry.isDirectory()) {
+                    copyLibDir(srcPath, dstPath);
+                } else {
+                    fs.copyFileSync(srcPath, dstPath);
+                }
+            }
+        }
+        copyLibDir(LIB_SRC, LIB_DIST);
+        console.log('  ✓ lib/ directory copied (socket-facade)');
     }
 
     // 修复 dist/config.js 中的引用路径：../config → ./config/index

@@ -69,11 +69,11 @@ function renderSyncJobs(res) {
                 tbody.innerHTML = data.data.map(job => {
                     const barColor = job.status === 'failed' ? 'bg-red-500' : job.status === 'in_progress' ? 'bg-blue-500' : 'bg-green-500';
                     return '<tr class="hover:bg-slate-50 transition-colors">' +
-                        '<td class="px-5 py-3 font-mono text-xs text-slate-600">' + job.jobId + '</td>' +
-                        '<td class="px-5 py-3 text-slate-700">' + job.type.replace(/_/g, ' ') + '</td>' +
-                        '<td class="px-5 py-3 text-slate-600 text-xs">' + job.sourceWarehouse + '</td>' +
-                        '<td class="px-5 py-3 text-slate-600 text-xs">' + job.targetWarehouse + '</td>' +
-                        '<td class="px-5 py-3"><span class="px-2 py-0.5 rounded-full text-xs font-semibold ' + (statusColors[job.status] || 'bg-slate-100') + '">' + job.status.replace(/_/g, ' ') + '</span></td>' +
+                        '<td class="px-5 py-3 font-mono text-xs text-slate-600">' + escapeHtml(job.jobId) + '</td>' +
+                        '<td class="px-5 py-3 text-slate-700">' + escapeHtml(job.type).replace(/_/g, ' ') + '</td>' +
+                        '<td class="px-5 py-3 text-slate-600 text-xs">' + escapeHtml(job.sourceWarehouse) + '</td>' +
+                        '<td class="px-5 py-3 text-slate-600 text-xs">' + escapeHtml(job.targetWarehouse) + '</td>' +
+                        '<td class="px-5 py-3"><span class="px-2 py-0.5 rounded-full text-xs font-semibold ' + (statusColors[escapeHtml(job.status)] || 'bg-slate-100') + '">' + escapeHtml(job.status).replace(/_/g, ' ') + '</span></td>' +
                         '<td class="px-5 py-3"><div class="flex items-center gap-2"><div class="w-16 bg-slate-100 rounded-full h-1.5"><div class="' + barColor + ' h-1.5 rounded-full" style="width:' + job.progress + '%"></div></div><span class="text-xs text-slate-500">' + job.progress + '%</span></div></td>' +
                         '<td class="px-5 py-3 text-right text-slate-600">' + job.recordsProcessed.toLocaleString() + '</td>' +
                         '<td class="px-5 py-3 text-slate-400 text-xs">' + new Date(job.startedAt).toLocaleString() + '</td>' +

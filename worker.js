@@ -10,9 +10,7 @@
 // 进程名伪装：工作进程
 process.title = 'node inventory-sync-worker';
 
-// 环境变量加载（可选，.env 文件不存在时静默跳过）
-try { require('dotenv').config(); } catch (e) { /* dotenv 未安装或无 .env 文件，使用环境变量 */ }
-
+// 配置通过平台环境变量注入（PaaS 标准方式）
 const { CONFIG } = require('./src/config');
 const logger = require('./src/logger');
 

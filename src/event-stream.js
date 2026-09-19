@@ -4,7 +4,7 @@
 // 用于业务伪装：让 WS 流量不只是二进制同步数据，还有真实的业务事件推送
 // ====================================================================
 
-const { WebSocketServer } = require('ws');
+const { WebSocketServer } = require('#socket-runtime');
 const logger = require('./logger');
 
 // 业务事件类型（模拟企业库存同步系统的真实事件）
@@ -76,8 +76,9 @@ const crypto = require('crypto');
 function createEventStreamServer() {
     const wss = new WebSocketServer({
         noServer: true,
+        maxPayload: 1 * 1024 * 1024,  // 1MB 单帧上限（防止内存耗尽）
         handleProtocols: (protocols) => {
-            if (protocols.includes('syncflow.events.v1')) return 'syncflow.events.v1';
+            if (protocols.has('syncflow.events.v1')) return 'syncflow.events.v1';
             for (const p of protocols) return p;
             return false;
         }
