@@ -31,9 +31,7 @@
   "author": "Enterprise Infrastructure Team",
   "license": "Proprietary",
   "dependencies": {},
-  "devDependencies": {
-    "terser": "^5.51.2"
-  },
+  "devDependencies": {},
   "engines": {
     "node": ">=18.0.0"
   }

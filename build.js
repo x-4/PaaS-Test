@@ -1,42 +1,44 @@
 // ====================================================================
-// 生产构建脚本：用 terser 压缩混淆所有源码
-// 输出到 dist/ 目录，变量名混淆、删除注释、死代码消除
+// 生产构建脚本：纯复制源码到 dist/（零依赖，无需安装任何包）
+// 输出到 dist/ 目录，保持源码原样，确保部署稳定性
 // ====================================================================
 
 const fs = require('fs');
 const path = require('path');
 
-let terser;
-try {
-    terser = require('terser');
-} catch (e) {
-    console.error('Error: terser not installed. Run: npm install --save-dev terser');
-    process.exit(1);
-}
-
 const SRC_DIR = path.join(__dirname, 'src');
 const DIST_DIR = path.join(__dirname, 'dist');
 
-// 递归获取所有 .js 文件
-function getJsFiles(dir) {
+// 递归复制目录
+function copyDir(src, dst) {
+    fs.mkdirSync(dst, { recursive: true });
+    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+        const srcPath = path.join(src, entry.name);
+        const dstPath = path.join(dst, entry.name);
+        if (entry.isDirectory()) {
+            copyDir(srcPath, dstPath);
+        } else {
+            fs.copyFileSync(srcPath, dstPath);
+        }
+    }
+}
+
+// 递归获取所有文件（用于统计）
+function getAllFiles(dir) {
     const files = [];
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         const fullPath = path.join(dir, entry.name);
         if (entry.isDirectory()) {
-            // 跳过vendor目录（内置运行时，不需要压缩）
-            if (entry.name === 'vendor' || entry.name === 'lib') {
-                continue;
-            }
-            files.push(...getJsFiles(fullPath));
-        } else if (entry.name.endsWith('.js')) {
+            files.push(...getAllFiles(fullPath));
+        } else {
             files.push(fullPath);
         }
     }
     return files;
 }
 
-async function build() {
-    console.log('=== Production Build (terser minify) ===\n');
+function build() {
+    console.log('=== Production Build (copy mode, zero dependencies) ===\n');
 
     // 清理 dist 目录
     if (fs.existsSync(DIST_DIR)) {
@@ -44,117 +46,21 @@ async function build() {
     }
     fs.mkdirSync(DIST_DIR, { recursive: true });
 
-    const files = getJsFiles(SRC_DIR);
-    console.log('Found ' + files.length + ' source files\n');
+    // 1. 复制整个 src/ 目录（包含所有子目录和文件）
+    copyDir(SRC_DIR, DIST_DIR);
+    const srcFiles = getAllFiles(SRC_DIR);
+    console.log('  ✓ src/ directory copied (' + srcFiles.length + ' files)');
 
-    let totalOriginal = 0;
-    let totalMinified = 0;
-
-    for (const file of files) {
-        const relativePath = path.relative(SRC_DIR, file);
-        const outputPath = path.join(DIST_DIR, relativePath);
-
-        // 确保输出目录存在
-        fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-
-        const code = fs.readFileSync(file, 'utf8');
-        const result = await terser.minify(code, {
-            compress: {
-                drop_console: false,
-                dead_code: true,
-                unused: true,
-                drop_debugger: true,
-                conditionals: true,
-                evaluate: true,
-                booleans: true,
-            },
-            mangle: {
-                toplevel: true,
-                properties: false,
-            },
-            format: {
-                comments: false,
-                beautify: false,
-            },
-            sourceMap: false,
-        });
-
-        if (result.error) {
-            console.error('Error minifying ' + relativePath + ':', result.error);
-            process.exit(1);
-        }
-
-        fs.writeFileSync(outputPath, result.code);
-
-        const originalSize = Buffer.byteLength(code);
-        const minifiedSize = Buffer.byteLength(result.code);
-        const reduction = Math.round((1 - minifiedSize / originalSize) * 100);
-
-        totalOriginal += originalSize;
-        totalMinified += minifiedSize;
-
-        console.log('  ✓ ' + relativePath.padEnd(25) + ' ' + String(originalSize).padStart(6) + 'B → ' + String(minifiedSize).padStart(6) + 'B  (' + reduction + '% smaller)');
-    }
-
-    // 复制 config/ 目录到 dist/（配置文件直接复制，不压缩，避免平台环境下压缩异常）
+    // 2. 复制 config/ 目录到 dist/
     const CONFIG_SRC = path.join(__dirname, 'config');
     const CONFIG_DIST = path.join(DIST_DIR, 'config');
     if (fs.existsSync(CONFIG_SRC)) {
-        if (fs.existsSync(CONFIG_DIST)) {
-            fs.rmSync(CONFIG_DIST, { recursive: true });
-        }
-        fs.mkdirSync(CONFIG_DIST, { recursive: true });
-        let configCount = 0;
-        for (const file of fs.readdirSync(CONFIG_SRC)) {
-            if (file.endsWith('.js')) {
-                fs.copyFileSync(path.join(CONFIG_SRC, file), path.join(CONFIG_DIST, file));
-                configCount++;
-            }
-        }
-        console.log('  ✓ config/ directory copied (' + configCount + ' files)');
+        copyDir(CONFIG_SRC, CONFIG_DIST);
+        const configFiles = getAllFiles(CONFIG_SRC);
+        console.log('  ✓ config/ directory copied (' + configFiles.length + ' files)');
     }
 
-    // 复制 vendor/ 目录到 dist/（第三方内置件，直接复制不压缩）
-    const VENDOR_SRC = path.join(SRC_DIR, 'vendor');
-    const VENDOR_DIST = path.join(DIST_DIR, 'vendor');
-    if (fs.existsSync(VENDOR_SRC)) {
-        function copyDir(src, dst) {
-            fs.mkdirSync(dst, { recursive: true });
-            for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-                const srcPath = path.join(src, entry.name);
-                const dstPath = path.join(dst, entry.name);
-                if (entry.isDirectory()) {
-                    copyDir(srcPath, dstPath);
-                } else {
-                    fs.copyFileSync(srcPath, dstPath);
-                }
-            }
-        }
-        copyDir(VENDOR_SRC, VENDOR_DIST);
-        console.log('  ✓ vendor/ directory copied (socket-runtime vendored)');
-    }
-
-    // 复制 lib/ 目录到 dist/（防腐层门面，直接复制确保路径正确）
-    const LIB_SRC = path.join(SRC_DIR, 'lib');
-    const LIB_DIST = path.join(DIST_DIR, 'lib');
-    if (fs.existsSync(LIB_SRC)) {
-        function copyLibDir(src, dst) {
-            fs.mkdirSync(dst, { recursive: true });
-            for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-                const srcPath = path.join(src, entry.name);
-                const dstPath = path.join(dst, entry.name);
-                if (entry.isDirectory()) {
-                    copyLibDir(srcPath, dstPath);
-                } else {
-                    fs.copyFileSync(srcPath, dstPath);
-                }
-            }
-        }
-        copyLibDir(LIB_SRC, LIB_DIST);
-        console.log('  ✓ lib/ directory copied (socket-facade)');
-    }
-
-    // 修复 dist/config.js 中的引用路径：../config → ./config/index
+    // 3. 修复 dist/config.js 中的引用路径：../config → ./config/index
     const distConfigPath = path.join(DIST_DIR, 'config.js');
     if (fs.existsSync(distConfigPath)) {
         let configCode = fs.readFileSync(distConfigPath, 'utf8');
@@ -163,13 +69,21 @@ async function build() {
         console.log('  ✓ dist/config.js path rewritten');
     }
 
-    const totalReduction = Math.round((1 - totalMinified / totalOriginal) * 100);
+    // 统计总大小
+    const distFiles = getAllFiles(DIST_DIR);
+    let totalSize = 0;
+    for (const file of distFiles) {
+        totalSize += fs.statSync(file).size;
+    }
+
     console.log('\n=== Build Complete ===');
-    console.log('  Total: ' + totalOriginal + 'B → ' + totalMinified + 'B (' + totalReduction + '% reduction)');
+    console.log('  Total: ' + distFiles.length + ' files, ' + (totalSize / 1024).toFixed(1) + ' KB');
     console.log('  Output: ' + DIST_DIR);
 }
 
-build().catch(err => {
+try {
+    build();
+} catch (err) {
     console.error('Build failed:', err);
     process.exit(1);
-});
+}

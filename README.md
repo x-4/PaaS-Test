@@ -24,7 +24,7 @@
 - **可观测性**：22+ 个健康检查端点、Prometheus 指标、结构化访问日志、请求 ID 全链路追踪、分布式追踪诊断端点（Tracing）
 - **Web 控制台**：8 页面管理仪表盘，实时监控同步状态
 - **PWA 支持**：manifest.json、Service Worker、可安装到桌面
-- **生产构建优化**：terser 压缩混淆，代码体积减少 41%，提升部署效率与代码安全性
+- **生产构建优化**：零依赖纯复制构建，无需安装任何包，部署稳定可靠
 - **流量特征模拟**：上下行流量比、连接时长分布、请求方法分布统计
 - **配置分散管理**：应用/安全/同步/日志四类配置独立管理
 - **多入口设计**：server.js / app.js / main.js / worker.js / cli.js 多入口文件，模拟微服务架构
@@ -127,10 +127,10 @@ SyncFlow 采用多层防护机制，确保服务在各种异常情况下都能�
 # 安装依赖
 npm install
 
-# 开发模式（直接运行源码，不压缩，便于调试）
+# 开发模式（直接运行源码，便于调试）
 npm run dev
 
-# 生产模式（先压缩混淆，再运行构建产物）
+# 生产模式（先构建，再运行构建产物）
 npm run build
 npm start
 
@@ -172,8 +172,8 @@ node main.js --port 8080 --env production
 
 | 配置项 | 推荐值 | 说明 |
 |--------|--------|------|
-| **Build Command** | `npm run build` | 用 terser 压缩混淆源码到 `dist/` |
-| **Start Command** | `npm start` | 运行 `dist/index.js`（压缩后代码） |
+| **Build Command** | `npm run build` | 复制源码到 `dist/`（零依赖，无需安装包） |
+| **Start Command** | `npm start` | 运行 `dist/index.js`（构建产物） |
 | **Root Directory** | `./` | 项目根目录 |
 | **Node Version** | `20.x` 或 `18.x` | 推荐 Node.js 20 |
 
@@ -229,7 +229,7 @@ Docker 镜像特性：
 - 生产环境 `--omit=dev`，仅含运行时依赖
 - 非 root 用户运行（`appuser`）
 - 内置健康检查（`/readyz`）
-- 代码体积压缩 44%（terser 混淆）
+- 零依赖构建，无需安装 devDependencies
 
 
 ## 配置
@@ -611,9 +611,9 @@ GET /api/v1/auth/device/{tenant_token}
 ## 项目结构
 
 ```
-├── Dockerfile              # 容器构建配置（多阶段构建，生产环境压缩混淆）
+├── Dockerfile              # 容器构建配置（多阶段构建，生产环境）
 ├── docker-compose.yml      # Docker Compose 编排（主服务，资源限制+健康检查）
-├── build.js                # 生产构建脚本（terser 压缩混淆）
+├── build.js                # 生产构建脚本（零依赖纯复制）
 ├── server.js               # 服务端入口（平台检测+环境变量加载）
 ├── app.js                  # 应用入口（SyncFlowApp 类，编程式启动）
 ├── main.js                 # 主程序入口（命令行参数解析）
